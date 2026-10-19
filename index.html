@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+<title>Drop Studio</title>
+<meta name="description" content="Put your art on a 3D tee, hoodie or crewneck and export photos, turntable videos and colorway sheets for your next drop.">
+<meta name="theme-color" content="#141C3A">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="css/app.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M11 4.5 4 8.2l2.6 6 2.7-1.2V27.5h13.4V13l2.7 1.2 2.6-6L21 4.5c-.9 1.9-2.8 3.1-5 3.1s-4.1-1.2-5-3.1Z" fill="currentColor"/><rect x="9.3" y="23.4" width="13.4" height="1.6" fill="#E0452F"/></svg>
+      <span>Drop Studio</span>
+    </div>
+    <button type="button" class="design-name" id="design-name" data-action="rename" aria-label="Rename design"></button>
+    <div class="top-actions">
+      <button type="button" class="iconbtn" id="undo-btn" data-action="undo" aria-label="Undo" disabled><svg viewBox="0 0 24 24"><path d="M9 7 4 12l5 5M4.5 12H15a5 5 0 0 1 0 10h-2"/></svg></button>
+      <button type="button" class="iconbtn" id="redo-btn" data-action="redo" aria-label="Redo" disabled><svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5M19.5 12H9a5 5 0 0 0 0 10h2"/></svg></button>
+      <button type="button" class="btn quiet" data-action="designs">Designs</button>
+    </div>
+  </header>
+
+  <main class="stage-wrap" id="stage-wrap">
+    <canvas id="stage" aria-label="3D garment preview. Drag to turn it, pinch to zoom."></canvas>
+    <div class="views" role="toolbar" aria-label="Camera views">
+      <button type="button" data-view="front">Front</button>
+      <button type="button" data-view="back">Back</button>
+      <button type="button" data-view="angle">Angle</button>
+      <button type="button" data-view="side">Side</button>
+      <button type="button" data-view="close">Close-up</button>
+      <button type="button" data-action="spin" id="spin-btn" aria-pressed="false">Spin</button>
+    </div>
+    <p class="hint" id="hint" hidden></p>
+    <div class="busy" id="busy" hidden>
+      <div class="busy-card"><span id="busy-text">Rendering</span><div class="bar"><i id="busy-bar"></i></div></div>
+    </div>
+    <div class="drop-target" id="drop-target" hidden>Drop images to add them</div>
+  </main>
+
+  <section class="sheet" id="sheet">
+    <div class="selvedge" aria-hidden="true"></div>
+    <nav class="tabs" role="tablist" aria-label="Editor">
+      <button type="button" role="tab" data-tab="garment" id="tab-garment">Garment</button>
+      <button type="button" role="tab" data-tab="color" id="tab-color">Color</button>
+      <button type="button" role="tab" data-tab="art" id="tab-art">Art</button>
+      <button type="button" role="tab" data-tab="scene" id="tab-scene">Scene</button>
+      <button type="button" role="tab" data-tab="export" id="tab-export">Export</button>
+    </nav>
+    <div class="panels">
+      <div class="panel" id="panel-garment" role="tabpanel" aria-labelledby="tab-garment"></div>
+      <div class="panel" id="panel-color" role="tabpanel" aria-labelledby="tab-color"></div>
+      <div class="panel" id="panel-art" role="tabpanel" aria-labelledby="tab-art"></div>
+      <div class="panel" id="panel-scene" role="tabpanel" aria-labelledby="tab-scene"></div>
+      <div class="panel" id="panel-export" role="tabpanel" aria-labelledby="tab-export"></div>
+    </div>
+  </section>
+</div>
+
+<dialog id="designs-dlg" class="dlg">
+  <div class="dlg-head">
+    <h2>Your designs</h2>
+    <button type="button" class="iconbtn" data-action="close-dlg" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <button type="button" class="btn primary wide" data-action="new-design">New design</button>
+  <div class="designs" id="designs-list"></div>
+</dialog>
+
+<dialog id="result-dlg" class="dlg">
+  <div class="dlg-head">
+    <h2 id="result-title">Ready</h2>
+    <button type="button" class="iconbtn" data-action="close-dlg" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="result" id="result-view"></div>
+  <div class="row-btns">
+    <button type="button" class="btn primary" data-action="share-result">Share</button>
+    <button type="button" class="btn" data-action="save-result">Save to device</button>
+  </div>
+</dialog>
+
+<dialog id="rename-dlg" class="dlg small">
+  <form method="dialog" id="rename-form">
+    <label class="field"><span>Design name</span><input id="rename-in" maxlength="60" autocomplete="off"></label>
+    <div class="row-btns">
+      <button type="button" class="btn" data-action="close-dlg">Cancel</button>
+      <button type="submit" class="btn primary">Rename</button>
+    </div>
+  </form>
+</dialog>
+
+<input type="file" id="file-in" accept="image/*" multiple hidden>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<noscript><p class="noscript">Drop Studio needs JavaScript and WebGL.</p></noscript>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
