@@ -1,8 +1,9 @@
 import {
   MOVES, SHOTS, COMBOS, LEVELS, PACES, ZONES, makeCaller, gapFor, maxHr, pctOfMax,
-  pctOfReserve, zoneFor, targetBpm, weightLoss, fmtTime,
+  pctOfReserve, zoneFor, targetBpm, weightLoss, fmtTime, NUDGES, slug, allLines,
 } from './data.js';
 import { GUIDE } from './guide.js';
+import { CLIPS } from './clips.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -16,7 +17,7 @@ const store = {
 
 const S = Object.assign({
   level: 1, pace: 'easy', work: 30, rest: 30, rounds: 6,
-  calls: true, voice: true, beeps: true, unit: 'lb', wIn: '', cutOk: false,
+  calls: true, voice: true, coach: true, beeps: true, unit: 'lb', wIn: '', cutOk: false,
 }, store.get('settings', {}));
 const profile = Object.assign({ age: null, rest: null, knownMax: null }, store.get('profile', {}));
 let log = store.get('log', []);
@@ -54,6 +55,12 @@ function renderTrain() {
 
   $('#opt-calls').checked = S.calls;
   $('#opt-voice').checked = S.voice;
+  $('#opt-coach').checked = S.coach && coachReady;
+  $('#opt-coach').disabled = !coachReady;
+  if (!coachReady) {
+    const have = LINES.filter((l) => CLIPS.includes(slug(l))).length;
+    $('#coach-note').textContent = `${have} of ${LINES.length} lines recorded so far. The phone's voice is used until the set is complete.`;
+  }
   $('#opt-beeps').checked = S.beeps;
 
   $('#cut-box').hidden = S.pace !== 'hard';
@@ -79,7 +86,7 @@ $('.steppers').addEventListener('click', (e) => {
   const k = b.closest('.stepper').dataset.key;
   S[k] = clamp(S[k] + +b.dataset.d, ...LIMITS[k]); save(); renderTrain();
 });
-for (const k of ['calls', 'voice', 'beeps']) {
+for (const k of ['calls', 'voice', 'coach', 'beeps']) {
   $('#opt-' + k).addEventListener('change', (e) => { S[k] = e.target.checked; save(); });
 }
 $('#w-in').addEventListener('input', (e) => { S.wIn = e.target.value; save(); });
@@ -116,7 +123,30 @@ function audioInit() {
   try {
     actx ??= new (window.AudioContext || window.webkitAudioContext)();
     if (actx.state === 'suspended') actx.resume();
+    loadClips();
   } catch { actx = null; }
+}
+
+// Recorded coach lines, one mp3 per phrase. Anything without a clip falls back to the phone's voice.
+// The coach only takes over once every line is recorded, so the voice never switches mid-session.
+const LINES = allLines();
+const coachReady = LINES.every((l) => CLIPS.includes(slug(l)));
+const clips = new Map();
+let clipSrc = null, clipsLoading = false;
+async function loadClips() {
+  if (clipsLoading || !actx || !coachReady) return;
+  clipsLoading = true;
+  await Promise.all(CLIPS.map(async (k) => {
+    try {
+      const res = await fetch(`audio/${k}.mp3`);
+      if (res.ok) clips.set(k, await actx.decodeAudioData(await res.arrayBuffer()));
+    } catch { /* offline before first cache: the phone voice covers it */ }
+  }));
+}
+function hush() {
+  synth?.cancel();
+  try { clipSrc?.stop(); } catch { /* already ended */ }
+  clipSrc = null;
 }
 function beep(freq, dur = 0.12, delay = 0, vol = 0.3) {
   if (!S.beeps || !actx) return;
@@ -139,8 +169,17 @@ function pickVoice() {
 if (synth) { pickVoice(); synth.addEventListener?.('voiceschanged', pickVoice); }
 const RATE = { easy: 1.05, medium: 1.2, hard: 1.3 };
 function say(text) {
-  if (!S.voice || !synth) return;
-  synth.cancel(); // a late call must never queue behind an old one
+  if (!S.voice) return;
+  hush(); // a late call must never queue behind an old one
+  const buf = S.coach && coachReady && actx?.state === 'running' && clips.get(slug(text));
+  if (buf) {
+    clipSrc = actx.createBufferSource();
+    clipSrc.buffer = buf;
+    clipSrc.connect(actx.destination);
+    clipSrc.start();
+    return;
+  }
+  if (!synth) return;
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'en-US'; u.rate = RATE[S.pace]; u.volume = 1;
   if (voice) u.voice = voice;
@@ -307,7 +346,7 @@ function sampleHr(p) {
 function setPaused(on) {
   if (!W || W.paused === on) return;
   W.paused = on;
-  if (on) { W.pausedAt = now(); synth?.cancel(); } else { W.t0 += now() - W.pausedAt; }
+  if (on) { W.pausedAt = now(); hush(); } else { W.t0 += now() - W.pausedAt; }
   wEl.dataset.paused = on ? '1' : '0';
   $('#w-pause').textContent = on ? 'Resume' : 'Pause';
   $('#w-phase').textContent = on ? 'PAUSED' : W.label;
@@ -336,7 +375,7 @@ let pending = null;
 function finish(completed) {
   clearInterval(W.timer);
   W.ended = true;
-  synth?.cancel();
+  hush();
   keepAwake(false);
   wEl.hidden = true;
   if (W.spent < 5) { W = null; return; } // quit during the countdown: nothing to save
@@ -385,7 +424,7 @@ $('#d-save').addEventListener('click', () => {
     const after = +$('#w-out').value;
     if (after > 0) pending.wOut = after;
     pending.pulse = pulses.done ?? null;
-    log.unshift(pending); log = log.slice(0, 300);
+    log.unshift(pending); log = log.slice(0, 300); syncNudgeState();
     store.set('log', log); pending = null;
   }
   $('#done').hidden = true;
@@ -528,8 +567,146 @@ $('.tabs').addEventListener('click', (e) => {
   scrollTo(0, 0);
 });
 
+// ---------- Nudges ----------
+
+const N = Object.assign({ on: false, from: 15, to: 21, every: 60, open: true, still: true, bg: true, last: 0 }, store.get('nudge', {}));
+const STILL_MIN = 20;
+const hasSW = 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost');
+const sameDay = (ts) => ts && new Date(ts).toDateString() === new Date().toDateString();
+const trainedToday = () => log.some((e) => sameDay(e.ts));
+const inHours = () => {
+  const h = new Date().getHours();
+  return N.from <= N.to ? h >= N.from && h < N.to : h >= N.from || h < N.to;
+};
+const nudgeDue = () => N.on && !W && !pending && !trainedToday() && inHours() && Date.now() - N.last > N.every * 60000;
+
+// The service worker cannot read localStorage, so the settings it needs go into a cache entry.
+async function syncNudgeState() {
+  store.set('nudge', N);
+  if (!('caches' in window)) return;
+  try {
+    const state = { on: N.on, bg: N.bg, from: N.from, to: N.to, every: N.every, last: N.last, lastSession: log[0]?.ts ?? 0, lines: NUDGES };
+    const cache = await caches.open('stance-state');
+    await cache.put('state', new Response(JSON.stringify(state), { headers: { 'content-type': 'application/json' } }));
+  } catch { /* storage blocked */ }
+}
+
+async function notify(body) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return false;
+  const opts = { body, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'nudge', renotify: true, vibrate: [200, 100, 200] };
+  try {
+    if (hasSW) { (await navigator.serviceWorker.ready).showNotification('Stance & Motion', opts); return true; }
+    new Notification('Stance & Motion', opts); return true;
+  } catch { return false; }
+}
+
+function fireNudge(test) {
+  const line = NUDGES[Math.floor(Math.random() * NUDGES.length)];
+  if (!test) { N.last = Date.now(); syncNudgeState(); }
+  if (document.visibilityState === 'visible') {
+    $('#nudge-text').textContent = line;
+    $('#nudge').hidden = false;
+    navigator.vibrate?.([200, 100, 200]);
+    audioInit(); say(line); // silent until the first tap on some phones
+    if (test) notify(line);
+  } else notify(line);
+}
+$('#nudge-later').addEventListener('click', () => { hush(); $('#nudge').hidden = true; });
+$('#nudge-go').addEventListener('click', () => {
+  hush(); $('#nudge').hidden = true;
+  S.pace = 'easy'; applyPreset(); save(); renderTrain();
+  $('[data-tab="train"]').click();
+  startWorkout();
+});
+
+// Motion: remember the last time the phone moved.
+let lastMoved = Date.now(), prevAcc = null, motionOn = false;
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity; if (!a || a.x == null) return;
+  if (prevAcc && Math.hypot(a.x - prevAcc.x, a.y - prevAcc.y, a.z - prevAcc.z) > 0.7) lastMoved = Date.now();
+  prevAcc = { x: a.x, y: a.y, z: a.z };
+}
+async function motionStart(askPermission) {
+  if (motionOn || !('DeviceMotionEvent' in window)) return;
+  try {
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      if (!askPermission) return; // iPhones only allow asking from a tap
+      if (await DeviceMotionEvent.requestPermission() !== 'granted') return;
+    }
+    addEventListener('devicemotion', onMotion); motionOn = true; lastMoved = Date.now();
+  } catch { /* sensor blocked */ }
+}
+setInterval(() => {
+  if (N.still && motionOn && Date.now() - lastMoved > STILL_MIN * 60000 && nudgeDue()) { lastMoved = Date.now(); fireNudge(); }
+}, 30000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && N.open && nudgeDue()) fireNudge();
+});
+
+async function bgSync() {
+  if (!hasSW) return 'none';
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    if (!('periodicSync' in reg)) return 'none';
+    const perm = await navigator.permissions.query({ name: 'periodic-background-sync' });
+    if (perm.state !== 'granted') return 'denied';
+    if (N.on && N.bg) await reg.periodicSync.register('nudge', { minInterval: N.every * 60000 });
+    else await reg.periodicSync.unregister('nudge');
+    return 'ok';
+  } catch { return 'none'; }
+}
+
+const hourName = (h) => `${h % 12 || 12} ${h < 12 ? 'am' : 'pm'}`;
+for (const id of ['n-from', 'n-to']) {
+  $('#' + id).innerHTML = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${hourName(h)}</option>`).join('');
+}
+async function renderNudge() {
+  $('#n-on').checked = N.on; $('#n-open').checked = N.open; $('#n-still').checked = N.still; $('#n-bg').checked = N.bg;
+  $('#n-from').value = N.from; $('#n-to').value = N.to; $('#n-every').value = N.every;
+  $('#n-body').dataset.off = N.on ? '0' : '1';
+  const bg = await bgSync();
+  const perm = 'Notification' in window ? Notification.permission : 'none';
+  const rows = [
+    perm === 'granted' ? ['yes', 'Notifications', 'Allowed.']
+      : perm === 'denied' ? ['no', 'Notifications', 'Blocked. Turn them back on for this site in your browser settings.']
+        : perm === 'none' ? ['no', 'Notifications', 'Not available here. On an iPhone, add the app to your Home Screen first.']
+          : ['', 'Notifications', 'Not asked yet. Turn on "Nudge me" to allow them.'],
+    bg === 'ok' ? ['yes', 'Background check-ins', 'Available. The phone decides the timing, and it can be as rare as once or twice a day.']
+      : bg === 'denied' ? ['no', 'Background check-ins', 'Install the app to your home screen and use it a few times, then Chrome allows them.']
+        : ['no', 'Background check-ins', 'Not available in this browser. They work in Chrome on Android with the app installed.'],
+    motionOn ? ['yes', 'Motion sensor', 'Reading movement while the app is open.']
+      : 'DeviceMotionEvent' in window ? ['', 'Motion sensor', 'Turn "Phone sitting still" off and on again to allow it.']
+        : ['no', 'Motion sensor', 'This device has no motion sensor the app can read.'],
+  ];
+  $('#n-status').innerHTML = rows.map(([c, t, d]) => `<div class="st ${c}"><i></i><b>${t}</b><span>${d}</span></div>`).join('');
+}
+$('#n-on').addEventListener('change', async (e) => {
+  N.on = e.target.checked;
+  if (N.on) {
+    if ('Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
+    if (N.still) await motionStart(true);
+  }
+  await syncNudgeState(); renderNudge();
+});
+for (const [id, key] of [['n-open', 'open'], ['n-still', 'still'], ['n-bg', 'bg']]) {
+  $('#' + id).addEventListener('change', async (e) => {
+    N[key] = e.target.checked;
+    if (key === 'still' && N.still) await motionStart(true);
+    await syncNudgeState(); renderNudge();
+  });
+}
+for (const [id, key] of [['n-from', 'from'], ['n-to', 'to'], ['n-every', 'every']]) {
+  $('#' + id).addEventListener('change', async (e) => { N[key] = +e.target.value; await syncNudgeState(); renderNudge(); });
+}
+$('#n-test').addEventListener('click', () => fireNudge(true));
+
 renderTrain(); renderHr(); renderLog();
 
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
-}
+if (hasSW) navigator.serviceWorker.register('sw.js').catch(() => {});
+syncNudgeState(); renderNudge();
+if (N.on && N.still) motionStart(false);
+// Opened from a notification, or opened on a day with no session yet.
+if (new URLSearchParams(location.search).has('nudge')) { history.replaceState(null, '', location.pathname); fireNudge(true); }
+else if (N.open && nudgeDue()) fireNudge();
+// Pull the coach clips through the service worker once so they are there offline.
+if (hasSW && coachReady) setTimeout(() => CLIPS.forEach((k) => fetch(`audio/${k}.mp3`).catch(() => {})), 4000);

@@ -29,6 +29,7 @@ Work, rest and rounds can all be changed. Turn off **Call moves** to use it as a
 - Tap-along pulse counter, and live heart rate from a Bluetooth chest strap (Chrome on Android or desktop).
 - Weight before and after for weight cut sessions, with the percent lost, a warning past 2%, and how much to drink back.
 - A log of every finished session, saved on the device.
+- **Nudges:** on days with no session yet, the app calls you out when you open it, when the phone has sat still for 20 minutes with the app open, and (Chrome on Android, installed) through background notifications. You pick the hours and how often.
 - A guide tab with the research behind the numbers and links to the sources.
 
 ## Put it online (GitHub Pages)
@@ -48,7 +49,15 @@ After the first visit it works with no connection.
 
 ## Updating
 
-Change the files, then bump `VERSION` at the top of `sw.js` (for example `stance-v2`) so installed phones pick up the new version.
+Change the files, then bump `VERSION` at the top of `sw.js` (for example `stance-v3`) so installed phones pick up the new version.
+
+## Coach voice
+
+The app can play recorded coach lines (made with ElevenLabs, voice "Dave - Coach") instead of the phone's built-in voice. Each line is one file in `audio/`, named after the spoken text in lowercase with dashes (`Shot, re-shot` → `audio/shot-re-shot.mp3`), and listed in `js/clips.js`. There are 47 lines in total (`allLines()` in `js/data.js`). The coach voice turns on by itself once all 47 are present; until then the phone's voice is used so the voice never changes mid-session.
+
+## What nudges cannot do
+
+A website app cannot see which other apps are open, cannot tell when the screen turns on, and cannot read the motion sensor while it is closed. Catching someone on social media needs a store-installed Android app with the Usage Access permission.
 
 ## Files
 
@@ -56,7 +65,8 @@ Change the files, then bump `VERSION` at the top of `sw.js` (for example `stance
 - `js/data.js`: moves, levels, paces, heart rate and weight maths
 - `js/app.js`: timer, voice caller, heart rate monitor, log
 - `js/guide.js`: guide text and sources
-- `sw.js`, `manifest.webmanifest`, `icons/`: offline and install support
+- `js/clips.js`, `audio/`: recorded coach lines
+- `sw.js`, `manifest.webmanifest`, `icons/`: offline, install and background nudges
 
 ## Safety
 

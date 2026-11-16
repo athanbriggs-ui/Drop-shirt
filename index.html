@@ -45,6 +45,7 @@
       <div class="toggles">
         <label><input type="checkbox" id="opt-calls"><span>Call moves</span><small>Off = interval timer only</small></label>
         <label><input type="checkbox" id="opt-voice"><span>Voice</span><small>Speaks each call out loud</small></label>
+        <label><input type="checkbox" id="opt-coach"><span>Coach voice</span><small id="coach-note">Recorded coach instead of the phone's built-in voice</small></label>
         <label><input type="checkbox" id="opt-beeps"><span>Beeps</span><small>Whistle and 3-2-1 countdown</small></label>
       </div>
 
@@ -98,6 +99,39 @@
       </div>
     </section>
 
+    <!-- NUDGES -->
+    <section class="view" id="view-nudge" hidden>
+      <header class="top"><h1>Nudges</h1><p>No session today? The app gets on your case until you move.</p></header>
+
+      <div class="toggles">
+        <label><input type="checkbox" id="n-on"><span>Nudge me</span><small>Only on days you have not trained yet</small></label>
+      </div>
+
+      <div id="n-body">
+        <h2>When</h2>
+        <div class="card rows">
+          <label>From<select id="n-from"></select></label>
+          <label>Until<select id="n-to"></select></label>
+          <label>At most every<select id="n-every">
+            <option value="30">30 minutes</option><option value="60">1 hour</option>
+            <option value="120">2 hours</option><option value="240">4 hours</option></select></label>
+        </div>
+
+        <h2>What sets it off</h2>
+        <div class="toggles">
+          <label><input type="checkbox" id="n-open"><span>Picking up my phone</span><small>Calls you out the moment this app comes back on screen</small></label>
+          <label><input type="checkbox" id="n-still"><span>Phone sitting still</span><small id="n-still-note">No movement for 20 minutes while the app is open</small></label>
+          <label><input type="checkbox" id="n-bg"><span>Background check-ins</span><small id="n-bg-note">Notifications while the app is closed</small></label>
+        </div>
+
+        <button type="button" class="btn" id="n-test">Send a test nudge</button>
+
+        <h2>What this phone allows</h2>
+        <div class="card" id="n-status"></div>
+        <p class="fine">A website app cannot see which other apps you are in or when your screen turns on, so it cannot catch you on social media. Phones only give that to store apps with a special permission. To cover the gap, set your phone's own screen time limit on those apps and let the nudges here do the rest.</p>
+      </div>
+    </section>
+
     <!-- LOG -->
     <section class="view" id="view-log" hidden>
       <header class="top"><h1>Log</h1><p>Every finished session, saved on this device.</p></header>
@@ -116,9 +150,22 @@
   <nav class="tabs" aria-label="Sections">
     <button type="button" data-tab="train" class="on"><svg viewBox="0 0 24 24"><path d="M5 3l15 9-15 9z"/></svg>Train</button>
     <button type="button" data-tab="hr"><svg viewBox="0 0 24 24"><path d="M12 21s-8-5.3-8-11a4.6 4.6 0 0 1 8-3 4.6 4.6 0 0 1 8 3c0 5.7-8 11-8 11z"/></svg>Heart rate</button>
+    <button type="button" data-tab="nudge"><svg viewBox="0 0 24 24"><path d="M12 22a2.5 2.5 0 0 0 2.5-2.5h-5A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5.5-6.8V3a1.5 1.5 0 0 0-3 0v1.2A7 7 0 0 0 5 11v5l-2 2v1h18v-1z"/></svg>Nudges</button>
     <button type="button" data-tab="log"><svg viewBox="0 0 24 24"><path d="M4 5h16v3H4zm0 5.5h16v3H4zM4 16h16v3H4z"/></svg>Log</button>
     <button type="button" data-tab="guide"><svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5zm3 6v2h8V9zm0 4v2h8v-2z"/></svg>Guide</button>
   </nav>
+</div>
+
+<!-- NUDGE BANNER -->
+<div id="nudge" hidden role="alert">
+  <div class="nudge-in">
+    <span class="nudge-tag">Get up</span>
+    <p id="nudge-text"></p>
+    <div class="nudge-btns">
+      <button type="button" class="btn ghost" id="nudge-later">Not now</button>
+      <button type="button" class="btn primary" id="nudge-go">Start 6 minutes</button>
+    </div>
+  </div>
 </div>
 
 <!-- WORKOUT -->

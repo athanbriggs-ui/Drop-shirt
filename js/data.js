@@ -50,6 +50,21 @@ export const COMBOS = [
   combo('Down block, club, shot', 3.6),
 ];
 
+export const SYSTEM_LINES = ['Get in your stance', 'Go', 'Last round', 'Last round. Go', 'Rest', 'Time. Good work.'];
+
+export const NUDGES = [
+  "Get off your phone. Six minutes of stance and motion. Let's go.",
+  "You've been sitting too long. Get up and get in your stance.",
+  'Somebody in your bracket is drilling right now. What are you doing?',
+  'No session today. Fix that. Hit start.',
+  'Put the phone down and move your feet.',
+  'Stop scrolling. Start wrestling.',
+];
+
+// File name for a spoken line: audio/<slug>.mp3
+export const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+export const allLines = () => [...Object.values(MOVES), ...SHOTS, ...COMBOS].map((m) => m.say).concat(SYSTEM_LINES, NUDGES);
+
 const L1 = ['shot', 'sprawl', 'downblock', 'reshot'];
 const L2 = [...L1, 'fakeClubShot', 'clubShot', 'circleLeft', 'circleRight'];
 
