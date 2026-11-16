@@ -1,762 +1,535 @@
-import { GARMENTS, GARMENT_ORDER, FABRICS, WASHES, COLORS, FONTS, FINISHES } from './garments.js';
-import { buildGarment } from './mesh.js';
-import { Compositor, layerSize, hitLayer, clearTextCache } from './textures.js';
-import { Stage, LIGHTS, BACKDROPS } from './scene.js';
-import * as store from './store.js';
-import * as ex from './export.js';
+import {
+  MOVES, SHOTS, COMBOS, LEVELS, PACES, ZONES, makeCaller, gapFor, maxHr, pctOfMax,
+  pctOfReserve, zoneFor, targetBpm, weightLoss, fmtTime,
+} from './data.js';
+import { GUIDE } from './guide.js';
 
-const $ = s => document.querySelector(s);
-const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const nextFrame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-const slug = s => (s || 'design').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'design';
-const INCH = 26; // garment units → inches of print width
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const now = () => performance.now() / 1000;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-const INKS = [['Black', '#111111'], ['White', '#FFFFFF'], ['Cream', '#EFE6D2'], ['Red', '#C8282E'], ['Navy', '#1D2A4D'], ['Gold', '#D8A33A'], ['Forest', '#2D4A35'], ['Pink', '#EBA6BE'], ['Sky', '#8DB5DD']];
-const ICON = {
-  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
-  eyeOff: '<path d="M3 3l18 18M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.9 8.4 2 12 2 12s3.6 7 10 7c1.8 0 3.3-.5 4.6-1.2M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
-  up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
-  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>',
-  text: '<path d="M5 7V4h14v3M12 4v16M9 20h6"/>',
-};
-const svg = (p, cls = '') => `<svg viewBox="0 0 24 24" class="${cls}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
-
-// ---------- state ----------
-const S = { design: null, assets: {}, selected: null, side: 'front', tab: 'art', undo: [], redo: [], view: 'front', thumb: null, result: null };
-const images = new Map();
-let stage, comp, shape, HI = 2048;
-const shapes = new Map();
-
-function luminance(hex) {
-  const n = parseInt(hex.slice(1), 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-function textLayer(d, o = {}) {
-  return { id: uid(), type: 'text', side: 'front', text: 'Your brand', font: 'Anton', size: 0.075, fill: luminance(d.color) < 0.45 ? '#FFFFFF' : '#111111', autoInk: true, stroke: '#111111', strokeW: 0, spacing: 0.02, arc: 0, align: 'center', x: 0, y: 0.33, rot: 0, opacity: 1, finish: 'print', visible: true, ...o };
-}
-function newDesign(name = 'Drop 01', first = false) {
-  const d = {
-    id: uid(), name, created: Date.now(), updated: Date.now(),
-    garment: 'tee', color: '#F5F5F2', colorName: 'White', heather: false, fabric: 'jersey', wash: 'clean', layers: [],
-    scene: { bg: 'paper', bgColor: '#E6E5E1', light: 'studio', shadow: 'floor' },
-    exp: { photo: 'portrait', transparent: false, motion: 'spin', seconds: 6, vsize: 'portrait', colorway: ['#F5F5F2', '#1A1A1C', '#B8BABC', '#1E2943'] },
-  };
-  if (first) d.layers.push(textLayer(d));
-  return d;
-}
-function migrate(d) {
-  const base = newDesign(d.name);
-  return { ...base, ...d, scene: { ...base.scene, ...d.scene }, exp: { ...base.exp, ...d.exp }, layers: d.layers || [] };
-}
-const layer = id => S.design.layers.find(l => l.id === id);
-// text you haven't recolored follows the garment: dark ink on light shirts, white on dark
-function autoInk() { const light = luminance(S.design.color) >= 0.45; for (const l of S.design.layers) if (l.type === 'text' && l.autoInk) l.fill = light ? '#111111' : '#FFFFFF'; }
-const sel = () => layer(S.selected);
-
-// ---------- shape + textures ----------
-function shapeFor(d) {
-  const key = d.garment + '|' + d.fabric;
-  if (!shapes.has(key)) shapes.set(key, buildGarment(GARMENTS[d.garment], FABRICS[d.fabric]));
-  return shapes.get(key);
-}
-function applyShape() {
-  shape = shapeFor(S.design);
-  stage.setShape(shape);
-  applyFabric();
-  queueTex();
-}
-function applyFabric() { stage.setFabric(S.design.color, FABRICS[S.design.fabric], S.design.wash); }
-function applyScene() {
-  const sc = S.design.scene;
-  stage.backdrop({ id: sc.bg, color: sc.bgColor });
-  stage.light(sc.light);
-  stage.shadow(sc.shadow);
-}
-
-let texPending = new Set(), texRaf = 0, hiTimer = 0, exporting = false;
-const guidesOn = () => S.tab === 'art' && !!S.selected && !exporting;
-function paint(side, size, guides) {
-  const cs = comp.render(side, { design: S.design, shape, images, S: size, guides, selectedId: S.selected, fabric: FABRICS[S.design.fabric], heather: S.design.heather });
-  stage.setTextures(side, cs);
-}
-function queueTex(sides = ['front', 'back']) {
-  sides.forEach(s => texPending.add(s));
-  if (!texRaf) texRaf = requestAnimationFrame(flushTex);
-  clearTimeout(hiTimer);
-  hiTimer = setTimeout(() => { if (HI > 2048 && stage.framed === false && !exporting) { paint('front', HI, guidesOn()); paint('back', HI, guidesOn()); } }, 1200);
-}
-function flushTex() {
-  texRaf = 0;
-  if (exporting) return;
-  for (const side of texPending) paint(side, 2048, guidesOn());
-  texPending.clear();
-}
-function paintNow() { cancelAnimationFrame(texRaf); texRaf = 0; texPending.clear(); paint('front', 2048, guidesOn()); paint('back', 2048, guidesOn()); }
-
-const fontsReady = new Set();
-function ensureFonts() {
-  for (const l of S.design.layers) {
-    if (l.type !== 'text' || fontsReady.has(l.font)) continue;
-    const f = FONTS.find(x => x.family === l.font) || FONTS[0];
-    fontsReady.add(l.font);
-    document.fonts.load(`${f.style || 'normal'} ${f.weight || 400} 40px "${f.family}"`).then(() => { clearTextCache(); queueTex(); refreshOutputs(); }).catch(() => {});
-  }
-}
-
-async function loadAsset(id) {
-  if (images.has(id) || !S.assets[id]) return;
-  const img = new Image();
-  img.src = S.assets[id];
-  try { await img.decode(); images.set(id, img); } catch { /* broken image: layer is skipped */ }
-}
-
-// ---------- history + saving ----------
-let lastSnap = null, saveT = 0;
-const snapshot = () => JSON.stringify(S.design);
-function commit() {
-  const snap = snapshot();
-  if (snap === lastSnap) return;
-  if (lastSnap) S.undo.push(lastSnap);
-  if (S.undo.length > 60) S.undo.shift();
-  S.redo = []; lastSnap = snap;
-  scheduleSave(); renderTop();
-}
-function restore(snap) {
-  const prev = S.design;
-  S.design = JSON.parse(snap);
-  if (!sel()) S.selected = S.design.layers.at(-1)?.id || null;
-  if (prev.garment !== S.design.garment || prev.fabric !== S.design.fabric) applyShape();
-  applyFabric(); applyScene(); ensureFonts(); queueTex(); renderAll(); scheduleSave();
-}
-function undo() { if (!S.undo.length) return; S.redo.push(lastSnap); lastSnap = S.undo.pop(); restore(lastSnap); }
-function redo() { if (!S.redo.length) return; S.undo.push(lastSnap); lastSnap = S.redo.pop(); restore(lastSnap); }
-function scheduleSave() { clearTimeout(saveT); saveT = setTimeout(saveNow, 700); }
-async function saveNow() {
-  clearTimeout(saveT);
-  const d = S.design; d.updated = Date.now();
-  const assets = {};
-  for (const l of d.layers) if (l.assetId && S.assets[l.assetId]) assets[l.assetId] = S.assets[l.assetId];
-  try { await store.saveDesign({ ...d, assets, thumb: S.thumb }); await store.setMeta('current', d.id); }
-  catch (e) { toast('Couldn’t save on this device. Storage may be full.'); console.error(e); }
-}
-async function makeThumb() {
-  exporting = true; paint('front', 2048, false); paint('back', 2048, false);
-  S.thumb = stage.still(400, 500).toDataURL('image/jpeg', 0.82);
-  exporting = false; paintNow();
-}
-
-// ---------- open / new ----------
-async function openRecord(rec) {
-  const { assets = {}, thumb, ...d } = rec;
-  S.design = migrate(d); S.assets = assets; S.thumb = thumb || null;
-  images.clear();
-  await Promise.all(Object.keys(assets).map(loadAsset));
-  afterOpen();
-}
-function afterOpen() {
-  S.selected = S.design.layers.at(-1)?.id || null;
-  S.undo = []; S.redo = []; lastSnap = snapshot();
-  S.side = 'front'; S.view = 'front';
-  applyShape(); applyScene(); ensureFonts();
-  stage.turn(0, false); stage.frame(false);
-  renderAll();
-  store.setMeta('current', S.design.id).catch(() => {});
-}
-async function nextName() {
-  const list = await store.listDesigns().catch(() => []);
-  return `Drop ${String(list.length + 1).padStart(2, '0')}`;
-}
-
-// ---------- rendering the panels ----------
-function garmentIcon(k) {
-  const g = GARMENTS[k];
-  const right = g.outline.map(p => [p[0], p[1]]);
-  const left = right.slice(0, -1).reverse().map(([x, y]) => [-x, y]);
-  const nk = g.frontNeck.map(p => [p[0], p[1]]);
-  const neckL = nk.slice(1).map(([x, y]) => [-x, y]);
-  const neckR = nk.slice(1, -1).reverse();
-  const d = 'M' + [...right, ...left, ...neckL, ...neckR].map(([x, y]) => `${x.toFixed(3)} ${(-y).toFixed(3)}`).join('L') + 'Z';
-  let hood = '';
-  if (g.hood) { const h = g.hood.map(p => [p[0], p[1]]); const all = [...h, ...h.slice(0, -1).reverse().map(([x, y]) => [-x, y])]; hood = `<path vector-effect="non-scaling-stroke" d="M${all.map(([x, y]) => `${x} ${-y}`).join('L')}Z"/>`; }
-  return `<svg viewBox="-0.82 -0.98 1.64 1.66" aria-hidden="true">${hood}<path vector-effect="non-scaling-stroke" d="${d}"/></svg>`;
-}
-
-function renderTop() {
-  $('#design-name').textContent = S.design.name;
-  $('#undo-btn').disabled = !S.undo.length;
-  $('#redo-btn').disabled = !S.redo.length;
-}
-function renderTabs() {
-  document.querySelectorAll('.tabs [data-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === S.tab)));
-  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('on', p.id === 'panel-' + S.tab));
-}
-const pressed = v => `aria-pressed="${!!v}"`;
-
-function renderGarment() {
-  const d = S.design;
-  $('#panel-garment').innerHTML = `
-    <h3>Garment</h3>
-    <div class="garments">${GARMENT_ORDER.map(k => `<button type="button" class="gcard" data-action="garment" data-id="${k}" ${pressed(d.garment === k)}>${garmentIcon(k)}<span>${GARMENTS[k].name}</span></button>`).join('')}</div>
-    <h3>Fabric</h3>
-    <div class="seg">${Object.entries(FABRICS).map(([k, f]) => `<button type="button" data-action="fabric" data-id="${k}" ${pressed(d.fabric === k)}>${f.name}</button>`).join('')}</div>
-    <h3>Wash</h3>
-    <div class="seg">${Object.entries(WASHES).map(([k, n]) => `<button type="button" data-action="wash" data-id="${k}" ${pressed(d.wash === k)}>${n}</button>`).join('')}</div>`;
-}
-
-function renderColor() {
-  const d = S.design;
-  const custom = !COLORS.some(c => c[1].toLowerCase() === d.color.toLowerCase());
-  $('#panel-color').innerHTML = `
-    <h3>Garment color</h3>
-    <div class="picked"><b>${esc(custom ? 'Custom' : d.colorName)}</b><span>${d.color.toUpperCase()}</span></div>
-    <div class="swatches">${COLORS.map(([n, h, hz]) => `<button type="button" class="sw${hz ? ' heather' : ''}" style="--c:${h}" data-action="color" data-hex="${h}" data-name="${esc(n)}" data-heather="${hz ? 1 : 0}" aria-label="${esc(n)}" title="${esc(n)}" ${pressed(!custom && d.color.toLowerCase() === h.toLowerCase())}></button>`).join('')}
-      <label class="sw custom" title="Pick any color" ${pressed(custom)}><input type="color" data-input="garment-color" value="${d.color}" aria-label="Custom garment color"></label></div>
-    <label class="toggle"><span>Heather texture</span><input type="checkbox" data-input="heather" ${d.heather ? 'checked' : ''}></label>`;
-}
-
-function slider(key, label, min, max, step, val, out) {
-  return `<div class="slider"><label for="s-${key}">${label}</label><output id="o-${key}">${out}</output><input id="s-${key}" type="range" min="${min}" max="${max}" step="${step}" value="${val}" data-slider="${key}"></div>`;
-}
-function fmt(key, L) {
-  switch (key) {
-    case 'size': return `${(layerSize(L, images).w * INCH).toFixed(1)} in wide`;
-    case 'rot': return `${Math.round(L.rot || 0)}°`;
-    case 'opacity': return `${Math.round((L.opacity ?? 1) * 100)}%`;
-    case 'knockout': return L.knockout ? String(Math.round(L.knockout)) : 'Off';
-    case 'strokeW': return L.strokeW ? `${Math.round(L.strokeW * 100)}` : 'None';
-    case 'spacing': return `${Math.round((L.spacing || 0) * 100)}`;
-    case 'arc': return L.arc ? `${Math.round(L.arc)}°` : 'Straight';
-  }
-  return '';
-}
-function inkRow(action, current, allowNone) {
-  const isCustom = current && !INKS.some(i => i[1].toLowerCase() === current.toLowerCase());
-  return `<div class="swatches">${allowNone ? `<button type="button" class="sw small none" data-action="${action}" data-hex="" aria-label="Original colors" title="Original colors" ${pressed(!current)}></button>` : ''}${INKS.map(([n, h]) => `<button type="button" class="sw small" style="--c:${h}" data-action="${action}" data-hex="${h}" aria-label="${n}" title="${n}" ${pressed(current && current.toLowerCase() === h.toLowerCase())}></button>`).join('')}<label class="sw small custom" title="Pick any color" ${pressed(isCustom)}><input type="color" data-input="${action}" value="${current || '#111111'}" aria-label="Custom ink color"></label></div>`;
-}
-
-function renderArt() {
-  const d = S.design, L = sel();
-  const list = d.layers.slice().reverse();
-  const rows = list.map(l => {
-    const thumb = l.type === 'image'
-      ? (S.assets[l.assetId] ? `<img src="${S.assets[l.assetId]}" alt="">` : '')
-      : `<span style="font-family:'${esc(l.font)}';color:${l.fill}">Aa</span>`;
-    return `<li class="layer${l.id === S.selected ? ' on' : ''}${l.visible === false ? ' hidden-l' : ''}">
-      <span class="lthumb">${thumb}</span>
-      <button type="button" class="lname" data-action="select" data-id="${l.id}"><b>${esc(l.type === 'text' ? l.text.replace(/\n/g, ' ') : l.name || 'Image')}</b><small>${l.side === 'front' ? 'Front' : 'Back'}, ${FINISHES[l.finish || 'print'].toLowerCase()}</small></button>
-      <button type="button" class="iconbtn" data-action="toggle-vis" data-id="${l.id}" aria-label="${l.visible === false ? 'Show' : 'Hide'}">${svg(l.visible === false ? ICON.eyeOff : ICON.eye)}</button>
-      <button type="button" class="iconbtn" data-action="layer-up" data-id="${l.id}" aria-label="Bring forward" ${l === list[0] ? 'disabled' : ''}>${svg(ICON.up)}</button>
-    </li>`;
-  }).join('');
-  let editor = '';
-  if (L) {
-    const spots = GARMENTS[d.garment].spots;
-    const isText = L.type === 'text';
-    const sizeMin = isText ? 0.015 : 0.02, sizeMax = isText ? 0.3 : 0.75, sizeVal = isText ? L.size : L.w;
-    editor = `<div class="editor">
-      ${isText ? `
-        <h3>Text</h3>
-        <label class="field"><span>Words</span><textarea data-input="text" rows="2" spellcheck="false">${esc(L.text)}</textarea></label>
-        <div class="fonts">${FONTS.map(f => `<button type="button" data-action="font" data-id="${esc(f.family)}" style="font-family:'${esc(f.family)}';font-style:${f.style || 'normal'};font-weight:${f.weight || 400}" ${pressed(L.font === f.family)}>${f.label}</button>`).join('')}</div>
-        <h3>Ink</h3>
-        ${inkRow('fill', L.fill, false)}
-        ${slider('strokeW', 'Outline', 0, 1, 0.01, L.strokeW || 0, fmt('strokeW', L))}
-        ${L.strokeW ? inkRow('stroke', L.stroke, false) : ''}
-        ${slider('spacing', 'Letter spacing', -0.05, 0.5, 0.005, L.spacing || 0, fmt('spacing', L))}
-        ${slider('arc', 'Curve', -180, 180, 1, L.arc || 0, fmt('arc', L))}`
-      : `
-        <h3>Image</h3>
-        ${slider('knockout', 'Remove background', 0, 100, 1, L.knockout || 0, fmt('knockout', L))}
-        <p class="sub">Clears the color in the corners of your file, like a white box around a logo.</p>
-        <h3>Ink color</h3>
-        ${inkRow('tint', L.tint, true)}`}
-      <h3>Finish</h3>
-      <div class="seg">${Object.entries(FINISHES).map(([k, n]) => `<button type="button" data-action="finish" data-id="${k}" ${pressed((L.finish || 'print') === k)}>${n}</button>`).join('')}</div>
-      <h3>Placement</h3>
-      <div class="chips">${Object.keys(spots).map(k => `<button type="button" class="chip" data-action="place" data-id="${esc(k)}">${k}</button>`).join('')}</div>
-      ${slider('size', 'Size', sizeMin, sizeMax, 0.001, sizeVal, fmt('size', L))}
-      ${slider('rot', 'Rotate', -180, 180, 1, L.rot || 0, fmt('rot', L))}
-      ${slider('opacity', 'Opacity', 0.1, 1, 0.01, L.opacity ?? 1, fmt('opacity', L))}
-      <div class="row-btns">
-        <button type="button" class="btn" data-action="center">Center</button>
-        ${!isText ? '<button type="button" class="btn" data-action="flip">Flip</button>' : ''}
-        <button type="button" class="btn" data-action="move-side">Move to ${L.side === 'front' ? 'back' : 'front'}</button>
-      </div>
-      <div class="row-btns">
-        <button type="button" class="btn" data-action="duplicate">Duplicate</button>
-        <button type="button" class="btn danger" data-action="delete">Delete</button>
-      </div>
-    </div>`;
-  }
-  $('#panel-art').innerHTML = `
-    <div class="art-head"><div class="seg" role="group" aria-label="Side to add art to">
-      <button type="button" data-action="side" data-id="front" ${pressed(S.side === 'front')}>Front</button>
-      <button type="button" data-action="side" data-id="back" ${pressed(S.side === 'back')}>Back</button></div></div>
-    <div class="add-row">
-      <button type="button" class="btn" data-action="add-image">${svg(ICON.image)}Add image</button>
-      <button type="button" class="btn" data-action="add-text">${svg(ICON.text)}Add text</button>
-    </div>
-    ${rows ? `<ul class="layers">${rows}</ul>` : '<p class="empty">Add your artwork or a line of text to start. PNGs with a transparent background look best.</p>'}
-    ${editor}`;
-}
-function refreshOutputs() {
-  const L = sel(); if (!L) return;
-  for (const k of ['size', 'rot', 'opacity', 'knockout', 'strokeW', 'spacing', 'arc']) {
-    const o = document.getElementById('o-' + k); if (o) o.textContent = fmt(k, L);
-  }
-  const sz = document.getElementById('s-size'); if (sz && document.activeElement !== sz) sz.value = L.type === 'text' ? L.size : L.w;
-  const rt = document.getElementById('s-rot'); if (rt && document.activeElement !== rt) rt.value = L.rot || 0;
-}
-
-function renderScene() {
-  const sc = S.design.scene;
-  const bgSw = Object.entries(BACKDROPS).map(([k, b]) => {
-    const c = b.clear ? '' : b.grad ? `linear-gradient(${b.grad[0]}, ${b.grad[1]})` : b.color;
-    return `<button type="button" class="sw${b.clear ? ' none' : ''}" style="--c:${c}" data-action="bg" data-id="${k}" aria-label="${b.name}" title="${b.name}" ${pressed(sc.bg === k)}></button>`;
-  }).join('');
-  $('#panel-scene').innerHTML = `
-    <h3>Backdrop</h3>
-    <div class="swatches">${bgSw}<label class="sw custom" title="Pick any color" ${pressed(sc.bg === 'custom')}><input type="color" data-input="bg-color" value="${sc.bgColor}" aria-label="Custom backdrop color"></label></div>
-    <h3>Light</h3>
-    <div class="chips">${Object.entries(LIGHTS).map(([k, l]) => `<button type="button" class="chip" data-action="light" data-id="${k}" ${pressed(sc.light === k)}>${l.name}</button>`).join('')}</div>
-    <h3>Shadow</h3>
-    <div class="seg">${[['floor', 'On the floor'], ['wall', 'On a wall'], ['none', 'None']].map(([k, n]) => `<button type="button" data-action="shadow" data-id="${k}" ${pressed(sc.shadow === k)}>${n}</button>`).join('')}</div>
-    <p class="sub" style="margin-top:12px">Drag the shirt to turn it, pinch or scroll to zoom, two fingers to move it in the frame.</p>`;
-}
-
-function renderExport() {
-  const e = S.design.exp;
-  const vt = ex.videoType();
-  $('#panel-export').innerHTML = `
-    <h3>Photo</h3>
-    <div class="chips">${Object.entries(ex.PHOTO_SIZES).map(([k, s]) => `<button type="button" class="chip" data-action="exp" data-key="photo" data-id="${k}" ${pressed(e.photo === k)}>${s.name}</button>`).join('')}</div>
-    <label class="toggle"><span>Transparent background</span><input type="checkbox" data-input="transparent" ${e.transparent ? 'checked' : ''}></label>
-    <button type="button" class="btn primary wide" data-action="export-photo">Save photo</button>
-    <h3>Video</h3>
-    ${vt ? `<p class="sub">Saves as ${vt.ext.toUpperCase()}.</p>` : '<p class="sub">This browser can’t record video. Chrome on Android or a computer can.</p>'}
-    <div class="chips">${Object.entries(ex.MOTIONS).map(([k, n]) => `<button type="button" class="chip" data-action="exp" data-key="motion" data-id="${k}" ${pressed(e.motion === k)}>${n}</button>`).join('')}</div>
-    <div class="chips" style="margin-top:8px">${[4, 6, 8, 10].map(s => `<button type="button" class="chip" data-action="exp" data-key="seconds" data-id="${s}" ${pressed(e.seconds === s)}>${s} seconds</button>`).join('')}</div>
-    <div class="chips" style="margin-top:8px">${Object.entries(ex.VIDEO_SIZES).map(([k, s]) => `<button type="button" class="chip" data-action="exp" data-key="vsize" data-id="${k}" ${pressed(e.vsize === k)}>${s.name}</button>`).join('')}</div>
-    <button type="button" class="btn primary wide" style="margin-top:12px" data-action="export-video" ${vt ? '' : 'disabled'}>Record video</button>
-    <h3>Colorway sheet</h3>
-    <p class="sub">Pick up to 6 colors. Your design is shot in each one, side by side.</p>
-    <div class="swatches">${COLORS.map(([n, h, hz]) => `<button type="button" class="sw${hz ? ' heather' : ''}" style="--c:${h}" data-action="cw" data-hex="${h}" aria-label="${esc(n)}" title="${esc(n)}" ${pressed(e.colorway.includes(h))}></button>`).join('')}</div>
-    <button type="button" class="btn primary wide" style="margin-top:12px" data-action="export-colorway" ${e.colorway.length ? '' : 'disabled'}>Make colorway sheet (${e.colorway.length})</button>
-    ${installEvt ? '<button type="button" class="btn wide" style="margin-top:22px" data-action="install">Install Drop Studio on this device</button>' : ''}`;
-}
-
-function renderViews() {
-  document.querySelectorAll('.views [data-view]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === S.view)));
-  $('#spin-btn').setAttribute('aria-pressed', String(!!stage.spin));
-}
-function renderAll() { renderTop(); renderTabs(); renderGarment(); renderColor(); renderArt(); renderScene(); renderExport(); renderViews(); }
-
-// ---------- feedback ----------
-let toastT = 0;
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2800); }
-function busy(text, p = null, solid = false) {
-  const b = $('#busy'); b.hidden = false; b.style.background = solid ? 'rgba(14,20,48,.94)' : '';
-  $('#busy-text').textContent = text; $('#busy-bar').style.width = p == null ? '0' : `${Math.round(p * 100)}%`;
-}
-const unbusy = () => { $('#busy').hidden = true; };
-let hintShown = false;
-function hint(text) {
-  if (hintShown) return; hintShown = true;
-  const h = $('#hint'); h.textContent = text; h.hidden = false;
-  setTimeout(() => { h.hidden = true; }, 4200);
-}
-
-// ---------- actions ----------
-function setView(v) {
-  S.view = v;
-  if (v === 'front') { stage.turn(0); S.side = 'front'; }
-  else if (v === 'back') { stage.turn(Math.PI); S.side = 'back'; }
-  else if (v === 'angle') stage.turn(-0.62);
-  else if (v === 'side') stage.turn(-Math.PI / 2);
-  else if (v === 'close') {
-    const L = sel();
-    if (L) { const sz = layerSize(L, images); stage.closeUp(L.side, L.x, L.y, Math.max(sz.w, sz.h)); S.side = L.side; }
-    else stage.closeUp('front', 0, 0.3, 0.35);
-  }
-  renderViews(); if (S.tab === 'art') renderArt();
-}
-function faceSide(side) {
-  if (S.side === side && (S.view === 'front' || S.view === 'back' || S.view === 'close')) return;
-  S.side = side; S.view = side; stage.turn(side === 'back' ? Math.PI : 0); renderViews();
-}
-function select(id) {
-  S.selected = id;
-  const L = sel(); if (L) faceSide(L.side);
-  queueTex(); renderArt();
-}
-function spot(name) { return GARMENTS[S.design.garment].spots[name]; }
-function placeLayer(L, sp) {
-  L.side = sp.side; L.x = sp.x; L.y = sp.y; L.rot = sp.rot || 0;
-  if (L.type === 'text') { const w = layerSize(L, images).w; L.size = clamp(L.size * sp.w / w, 0.015, 0.3); } else L.w = sp.w;
-}
-
-async function readImageFile(f) {
-  const bmp = await createImageBitmap(f).catch(() => null);
-  let w, h, src;
-  if (bmp) { w = bmp.width; h = bmp.height; src = bmp; }
-  else { // SVG and anything createImageBitmap refuses
-    const url = URL.createObjectURL(f), img = new Image(); img.src = url;
-    await img.decode(); w = img.naturalWidth || 1600; h = img.naturalHeight || 1600; src = img;
-    if (f.type === 'image/svg+xml') { const s = 2400 / Math.max(w, h); w *= s; h *= s; }
-  }
-  const s = Math.min(1, 2400 / Math.max(w, h));
-  const c = document.createElement('canvas'); c.width = Math.round(w * s); c.height = Math.round(h * s);
-  const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(src, 0, 0, c.width, c.height);
-  // does it already have transparency, or a plain box around it?
-  const px = g.getImageData(0, 0, c.width, c.height).data;
-  let transparent = false;
-  for (let i = 3; i < px.length; i += 4 * 97) if (px[i] < 250) { transparent = true; break; }
-  const corner = (x, y) => { const i = (y * c.width + x) * 4; return [px[i], px[i + 1], px[i + 2]]; };
-  const cs = [corner(0, 0), corner(c.width - 1, 0), corner(0, c.height - 1), corner(c.width - 1, c.height - 1)];
-  const plain = !transparent && cs.every(q => Math.abs(q[0] - cs[0][0]) + Math.abs(q[1] - cs[0][1]) + Math.abs(q[2] - cs[0][2]) < 30);
-  const keepPng = transparent || /png|svg|gif|webp/.test(f.type);
-  return { url: c.toDataURL(keepPng ? 'image/png' : 'image/jpeg', 0.93), plain };
-}
-async function addImages(files) {
-  const list = [...files].filter(f => f.type.startsWith('image/'));
-  if (!list.length) return;
-  busy(list.length > 1 ? `Adding ${list.length} images` : 'Adding image');
-  let knocked = false;
-  try {
-    for (const f of list) {
-      const { url, plain } = await readImageFile(f);
-      const assetId = uid(); S.assets[assetId] = url; await loadAsset(assetId);
-      const sp = S.side === 'back' ? spot('Upper back') : spot('Center chest');
-      const L = { id: uid(), type: 'image', name: f.name.replace(/\.[a-z0-9]+$/i, '').slice(0, 40), assetId, side: S.side, x: sp.x, y: sp.y, w: sp.w, rot: 0, opacity: 1, finish: 'print', knockout: plain ? 14 : 0, tint: null, flip: false, visible: true };
-      if (sp.side !== S.side) { L.side = S.side; }
-      knocked ||= plain;
-      S.design.layers.push(L); S.selected = L.id;
-    }
-  } catch (e) { console.error(e); toast('That file couldn’t be opened. Try a PNG or JPG.'); }
-  unbusy();
-  queueTex(); renderArt(); commit();
-  if (knocked) toast('Removed the plain background. Adjust it under Remove background.');
-  hint('Drag art on the shirt to move it. Pinch to resize and turn.');
-}
-function addText() {
-  const sp = S.side === 'back' ? { ...spot('Upper back') } : spot('Center chest');
-  const L = textLayer(S.design, { side: S.side, x: sp.x, y: sp.y });
-  S.design.layers.push(L); S.selected = L.id;
-  ensureFonts(); queueTex(); renderArt(); commit();
-  hint('Drag art on the shirt to move it. Pinch to resize and turn.');
-  setTimeout(() => { const t = document.querySelector('[data-input="text"]'); t?.focus(); t?.select(); }, 50);
-}
-
-async function withExport(fn) {
-  exporting = true;
-  try {
-    paint('front', HI, false); paint('back', HI, false);
-    await nextFrame();
-    return await fn();
-  } finally {
-    S.thumb = stage.still(400, 500).toDataURL('image/jpeg', 0.82);
-    exporting = false; paintNow(); unbusy(); saveNow();
-  }
-}
-function showResult(blob, name, title) {
-  if (S.result?.url) URL.revokeObjectURL(S.result.url);
-  const url = URL.createObjectURL(blob);
-  S.result = { blob, name, url };
-  $('#result-title').textContent = title;
-  $('#result-view').innerHTML = blob.type.startsWith('video') ? `<video src="${url}" autoplay loop muted playsinline controls></video>` : `<img src="${url}" alt="Exported mockup">`;
-  $('#result-dlg').showModal();
-}
-async function exportPhoto() {
-  const e = S.design.exp;
-  busy('Rendering photo');
-  try {
-    const blob = await withExport(() => ex.photo(stage, e.photo, e.transparent));
-    showResult(blob, `${slug(S.design.name)}-${e.photo}.png`, 'Photo ready');
-  } catch (err) { console.error(err); toast('The photo didn’t render. Try a smaller size.'); }
-}
-async function exportVideo() {
-  const e = S.design.exp;
-  const wasSpin = stage.spin; stage.spin = false;
-  busy('Recording video', 0, true);
-  try {
-    const { blob, ext } = await withExport(() => ex.video(stage, { sizeId: e.vsize, motion: e.motion, seconds: e.seconds, onProgress: p => busy(`Recording video, ${Math.ceil(e.seconds * (1 - p))} s left`, p, true) }));
-    showResult(blob, `${slug(S.design.name)}-${e.motion}.${ext}`, 'Video ready');
-  } catch (err) { console.error(err); toast(err.message || 'The video didn’t record.'); }
-  stage.spin = wasSpin;
-}
-async function exportColorway() {
-  const d = S.design, e = d.exp;
-  const picks = e.colorway.map(h => COLORS.find(c => c[1] === h) || ['Custom', h]).slice(0, 6);
-  const orig = { color: d.color, heather: d.heather, fills: d.layers.map(l => l.fill) };
-  busy('Shooting colorways', 0);
-  try {
-    const put = () => { d.color = orig.color; d.heather = orig.heather; d.layers.forEach((l, i) => { if (l.type === 'text') l.fill = orig.fills[i]; }); applyFabric(); paint('front', HI, false); paint('back', HI, false); };
-    const blob = await withExport(async () => {
-      try {
-        return await ex.colorway(stage, picks, async ([, hex, hz]) => {
-          d.color = hex; d.heather = !!hz; autoInk(); applyFabric();
-          paint('front', HI, false); paint('back', HI, false);
-          await nextFrame();
-        }, { title: d.name, onProgress: p => busy('Shooting colorways', p) });
-      } finally { put(); }
-    });
-    showResult(blob, `${slug(d.name)}-colorways.png`, 'Colorway sheet ready');
-  } catch (err) { console.error(err); toast('The colorway sheet didn’t render.'); }
-}
-
-async function openDesigns() {
-  await makeThumb(); await saveNow();
-  const list = await store.listDesigns();
-  $('#designs-list').innerHTML = list.map(r => `<div class="dcard${r.id === S.design.id ? ' cur' : ''}">
-    <button type="button" class="open" data-action="open-design" data-id="${r.id}" aria-label="Open ${esc(r.name)}">${r.thumb ? `<img src="${r.thumb}" alt="">` : ''}</button>
-    <div class="dmeta"><b>${esc(r.name)}</b><small>${GARMENTS[r.garment]?.name || ''}, ${new Date(r.updated).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small></div>
-    <div class="dacts"><button type="button" data-action="dup-design" data-id="${r.id}">Duplicate</button><button type="button" data-action="del-design" data-id="${r.id}">Delete</button></div>
-  </div>`).join('');
-  const dlg = $('#designs-dlg'); if (!dlg.open) dlg.showModal();
-}
-
-let installEvt = null;
-const actions = {
-  tab: b => {
-    if (S.tab === b.dataset.tab && matchMedia('(max-width: 959px)').matches) { $('#sheet').classList.toggle('collapsed'); return; }
-    $('#sheet').classList.remove('collapsed');
-    S.tab = b.dataset.tab; renderTabs(); queueTex();
-    document.querySelector('.panels').scrollTop = 0;
-    if (S.tab === 'art' && S.design.layers.length) hint('Drag art on the shirt to move it. Pinch to resize and turn.');
-  },
-  undo, redo,
-  rename: () => { $('#rename-in').value = S.design.name; $('#rename-dlg').showModal(); $('#rename-in').select(); },
-  designs: openDesigns,
-  'close-dlg': b => b.closest('dialog').close(),
-  'new-design': async () => {
-    await saveNow();
-    S.design = newDesign(await nextName()); S.assets = {}; S.thumb = null; images.clear();
-    afterOpen(); await saveNow(); $('#designs-dlg').close(); S.tab = 'art'; renderTabs();
-  },
-  'open-design': async b => {
-    if (b.dataset.id === S.design.id) { $('#designs-dlg').close(); return; }
-    await saveNow();
-    const rec = await store.getDesign(b.dataset.id); if (rec) await openRecord(rec);
-    $('#designs-dlg').close();
-  },
-  'dup-design': async b => {
-    const rec = await store.getDesign(b.dataset.id); if (!rec) return;
-    await store.saveDesign({ ...rec, id: uid(), name: rec.name + ' copy', created: Date.now(), updated: Date.now() });
-    openDesigns();
-  },
-  'del-design': async b => {
-    const rec = (await store.listDesigns()).find(r => r.id === b.dataset.id);
-    if (!rec || !confirm(`Delete “${rec.name}”? This can’t be undone.`)) return;
-    await store.deleteDesign(rec.id);
-    if (rec.id === S.design.id) {
-      const left = await store.listDesigns();
-      if (left.length) await openRecord(await store.getDesign(left[0].id));
-      else { S.design = newDesign('Drop 01', true); S.assets = {}; S.thumb = null; images.clear(); afterOpen(); await saveNow(); }
-    }
-    openDesigns();
-  },
-  garment: b => {
-    const d = S.design, k = b.dataset.id;
-    if (d.garment === k) return;
-    d.garment = k;
-    if (GARMENTS[k].fleece && d.fabric === 'jersey') d.fabric = 'fleece';
-    if (!GARMENTS[k].fleece && d.fabric === 'fleece') d.fabric = 'jersey';
-    busy('Shaping garment');
-    setTimeout(() => { applyShape(); stage.frame(true); unbusy(); renderGarment(); renderArt(); commit(); }, 30);
-  },
-  fabric: b => { S.design.fabric = b.dataset.id; applyShape(); renderGarment(); commit(); },
-  wash: b => { S.design.wash = b.dataset.id; applyFabric(); queueTex(); renderGarment(); commit(); },
-  color: b => { const d = S.design; d.color = b.dataset.hex; d.colorName = b.dataset.name; d.heather = b.dataset.heather === '1'; autoInk(); applyFabric(); queueTex(); renderColor(); commit(); },
-  side: b => { faceSide(b.dataset.id); renderArt(); },
-  'add-image': () => $('#file-in').click(),
-  'add-text': addText,
-  select: b => select(b.dataset.id),
-  'toggle-vis': b => { const L = layer(b.dataset.id); L.visible = L.visible === false; queueTex([L.side]); renderArt(); commit(); },
-  'layer-up': b => { const a = S.design.layers, i = a.findIndex(l => l.id === b.dataset.id); if (i < a.length - 1) { [a[i], a[i + 1]] = [a[i + 1], a[i]]; queueTex(); renderArt(); commit(); } },
-  font: b => { const L = sel(); L.font = b.dataset.id; ensureFonts(); queueTex([L.side]); renderArt(); commit(); },
-  fill: b => { sel().fill = b.dataset.hex; sel().autoInk = false; queueTex([sel().side]); renderArt(); commit(); },
-  stroke: b => { sel().stroke = b.dataset.hex; queueTex([sel().side]); renderArt(); commit(); },
-  tint: b => { sel().tint = b.dataset.hex || null; queueTex([sel().side]); renderArt(); commit(); },
-  finish: b => { sel().finish = b.dataset.id; queueTex([sel().side]); renderArt(); commit(); },
-  place: b => { const L = sel(), from = L.side; placeLayer(L, spot(b.dataset.id)); queueTex(); faceSide(L.side); if (from !== L.side) renderArt(); else refreshOutputs(); commit(); },
-  center: () => { sel().x = 0; queueTex([sel().side]); commit(); },
-  flip: () => { const L = sel(); L.flip = !L.flip; queueTex([L.side]); commit(); },
-  'move-side': () => { const L = sel(); L.side = L.side === 'front' ? 'back' : 'front'; faceSide(L.side); queueTex(); renderArt(); commit(); },
-  duplicate: () => { const L = sel(); const c = { ...L, id: uid(), y: L.y - 0.05 }; S.design.layers.push(c); S.selected = c.id; queueTex([c.side]); renderArt(); commit(); },
-  delete: () => {
-    const a = S.design.layers, i = a.findIndex(l => l.id === S.selected); if (i < 0) return;
-    a.splice(i, 1); S.selected = a[Math.min(i, a.length - 1)]?.id || null; queueTex(); renderArt(); commit();
-  },
-  bg: b => { S.design.scene.bg = b.dataset.id; applyScene(); renderScene(); commit(); },
-  light: b => { S.design.scene.light = b.dataset.id; applyScene(); renderScene(); commit(); },
-  shadow: b => { S.design.scene.shadow = b.dataset.id; applyScene(); renderScene(); commit(); },
-  spin: () => { stage.spin = !stage.spin; renderViews(); },
-  exp: b => { const e = S.design.exp, k = b.dataset.key; e[k] = k === 'seconds' ? +b.dataset.id : b.dataset.id; renderExport(); scheduleSave(); },
-  cw: b => {
-    const e = S.design.exp, h = b.dataset.hex, i = e.colorway.indexOf(h);
-    if (i >= 0) e.colorway.splice(i, 1); else if (e.colorway.length < 6) e.colorway.push(h); else { toast('A sheet holds up to 6 colors.'); return; }
-    renderExport(); scheduleSave();
-  },
-  'export-photo': exportPhoto,
-  'export-video': exportVideo,
-  'export-colorway': exportColorway,
-  'share-result': async () => { const r = S.result; if (!r) return; const how = await ex.share(r.blob, r.name); if (how === 'downloaded') toast('Saved to your downloads.'); },
-  'save-result': () => { const r = S.result; if (!r) return; ex.download(r.blob, r.name); toast('Saved to your downloads.'); },
-  install: async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice.catch(() => {}); installEvt = null; renderExport(); },
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem('sm.' + k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('sm.' + k, JSON.stringify(v)); } catch { /* private mode */ } },
 };
 
-function wire() {
-  document.addEventListener('click', e => {
-    const v = e.target.closest('[data-view]');
-    if (v) { setView(v.dataset.view); return; }
-    const b = e.target.closest('[data-action]');
-    if (!b || b.disabled) return;
-    if (b.tagName === 'LABEL') return; // custom color pickers
-    const fn = actions[b.dataset.action];
-    if (fn) { e.preventDefault(); fn(b); }
-  });
-  document.querySelectorAll('.tabs [data-tab]').forEach(b => b.addEventListener('click', () => actions.tab(b)));
+const S = Object.assign({
+  level: 1, pace: 'easy', work: 30, rest: 30, rounds: 6,
+  calls: true, voice: true, beeps: true, unit: 'lb', wIn: '', cutOk: false,
+}, store.get('settings', {}));
+const profile = Object.assign({ age: null, rest: null, knownMax: null }, store.get('profile', {}));
+let log = store.get('log', []);
+const save = () => store.set('settings', S);
 
-  // sliders: live while dragging, one undo step when released
-  document.addEventListener('input', e => {
-    const t = e.target;
-    if (t.dataset.slider) {
-      const L = sel(); if (!L) return;
-      const v = +t.value, k = t.dataset.slider;
-      if (k === 'size') { if (L.type === 'text') L.size = v; else L.w = v; }
-      else L[k] = v;
-      queueTex([L.side]); refreshOutputs();
-      return;
-    }
-    const k = t.dataset.input; if (!k) return;
-    const d = S.design, L = sel();
-    if (k === 'text' && L) { L.text = t.value; queueTex([L.side]); const nb = document.querySelector(`.layer.on .lname b`); if (nb) nb.textContent = t.value.replace(/\n/g, ' '); refreshOutputs(); }
-    else if (k === 'garment-color') { d.color = t.value; d.colorName = 'Custom'; autoInk(); applyFabric(); queueTex(); }
-    else if (k === 'bg-color') { d.scene.bg = 'custom'; d.scene.bgColor = t.value; applyScene(); }
-    else if ((k === 'fill' || k === 'stroke' || k === 'tint') && L) { L[k] = t.value; if (k === 'fill') L.autoInk = false; queueTex([L.side]); }
-  });
-  document.addEventListener('change', e => {
-    const t = e.target, k = t.dataset.input;
-    if (t.dataset.slider) { commit(); if (['strokeW'].includes(t.dataset.slider)) renderArt(); return; }
-    if (!k) return;
-    const d = S.design;
-    if (k === 'heather') { d.heather = t.checked; queueTex(); commit(); }
-    else if (k === 'transparent') { d.exp.transparent = t.checked; scheduleSave(); }
-    else if (k === 'garment-color') { renderColor(); commit(); }
-    else if (k === 'bg-color') { renderScene(); commit(); }
-    else if (k === 'text') { renderArt(); commit(); }
-    else if (k === 'fill' || k === 'stroke' || k === 'tint') { renderArt(); commit(); }
-  });
+// ---------- Train tab ----------
 
-  $('#file-in').addEventListener('change', e => { addImages(e.target.files); e.target.value = ''; });
-  $('#rename-form').addEventListener('submit', e => {
-    const v = $('#rename-in').value.trim();
-    if (v) { S.design.name = v; renderTop(); commit(); }
-  });
-  for (const d of document.querySelectorAll('dialog')) d.addEventListener('click', e => { if (e.target === d) d.close(); });
+const LIMITS = { work: [10, 300], rest: [5, 300], rounds: [1, 60] };
 
-  // drag-and-drop and paste
-  const dt = $('#drop-target');
-  window.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); dt.hidden = false; } });
-  window.addEventListener('dragleave', e => { if (!e.relatedTarget) dt.hidden = true; });
-  window.addEventListener('drop', e => { e.preventDefault(); dt.hidden = true; if (e.dataTransfer.files.length) { S.tab = 'art'; renderTabs(); addImages(e.dataTransfer.files); } });
-  window.addEventListener('paste', e => {
-    const files = [...(e.clipboardData?.files || [])];
-    if (files.length && !/input|textarea/i.test(document.activeElement?.tagName)) { e.preventDefault(); addImages(files); }
-  });
+function renderTrain() {
+  $('#levels').innerHTML = Object.entries(LEVELS).map(([n, lv]) =>
+    `<button type="button" role="radio" aria-checked="${S.level == n}" data-level="${n}"><span>Level</span><b>${n}</b></button>`).join('');
 
-  // keyboard
-  let nudgeT = 0;
-  document.addEventListener('keydown', e => {
-    if (/input|textarea/i.test(e.target.tagName) || document.querySelector('dialog[open]')) return;
-    const mod = e.ctrlKey || e.metaKey;
-    if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
-    if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
-    const L = sel(); if (!L || S.tab !== 'art') return;
-    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); actions.delete(); return; }
-    const step = e.shiftKey ? 0.02 : 0.004;
-    const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
-    if (mv) { e.preventDefault(); L.x += mv[0]; L.y += mv[1]; queueTex([L.side]); clearTimeout(nudgeT); nudgeT = setTimeout(commit, 400); }
-  });
+  const lv = LEVELS[S.level];
+  $('#level-moves').innerHTML = lv.base.map((k) => `<span>${MOVES[k].say}</span>`).join('') +
+    (lv.extras ? `<span class="plus">+ ${SHOTS.length} named shots</span><span class="plus">+ ${COMBOS.length} combos</span>` : '');
 
-  // touch the art on the shirt to move it; two fingers to resize and turn
-  const wrap = $('#stage-wrap');
-  const ptrs = new Map(); let drag = null, foreign = 0;
-  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), ang = (a, b) => Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
-  wrap.addEventListener('pointerdown', e => {
-    if (e.button > 0 || e.target !== stage.canvas) return;
-    if (drag) {
-      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      e.stopPropagation(); e.preventDefault();
-      if (ptrs.size === 2) { const [a, b] = [...ptrs.values()], L = layer(drag.id); drag.pinch = { d0: dist(a, b), a0: ang(a, b), w0: L.w, s0: L.size, r0: L.rot || 0 }; }
-      return;
-    }
-    if (S.tab !== 'art' || foreign > 0 || stage.recording) { foreign++; return; }
-    const hit = stage.pick(e.clientX, e.clientY);
-    const cand = hit && hit.outside && S.design.layers.filter(l => l.side === hit.side && l.visible !== false).reverse().find(l => hitLayer(l, images, hit.x, hit.y, 0.012));
-    if (!cand) { foreign++; return; }
-    e.stopPropagation(); e.preventDefault();
-    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    try { wrap.setPointerCapture(e.pointerId); } catch {}
-    drag = { id: cand.id, last: hit, side: hit.side, moved: false };
-    if (S.selected !== cand.id) { S.selected = cand.id; S.side = cand.side; queueTex(); renderArt(); }
-  }, true);
-  wrap.addEventListener('pointermove', e => {
-    if (!drag || !ptrs.has(e.pointerId)) return;
-    e.stopPropagation();
-    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const L = layer(drag.id); if (!L) return;
-    if (drag.pinch && ptrs.size >= 2) {
-      const [a, b] = [...ptrs.values()], k = dist(a, b) / drag.pinch.d0;
-      if (L.type === 'text') L.size = clamp(drag.pinch.s0 * k, 0.015, 0.3); else L.w = clamp(drag.pinch.w0 * k, 0.02, 0.75);
-      let r = drag.pinch.r0 + ang(a, b) - drag.pinch.a0; while (r > 180) r -= 360; while (r < -180) r += 360;
-      L.rot = Math.round(r);
-    } else if (ptrs.size === 1) {
-      const hit = stage.pick(e.clientX, e.clientY);
-      if (hit && hit.side === drag.side) { L.x += hit.x - drag.last.x; L.y += hit.y - drag.last.y; drag.last = hit; }
-    }
-    drag.moved = true; queueTex([L.side]); refreshOutputs();
-  }, true);
-  const end = e => {
-    if (!drag) { if (foreign > 0) foreign--; return; }
-    if (!ptrs.has(e.pointerId)) return;
-    ptrs.delete(e.pointerId); e.stopPropagation();
-    if (ptrs.size === 0) { if (drag.moved) commit(); drag = null; }
-    else if (drag.pinch) { drag.pinch = null; const p = [...ptrs.values()][0], hit = stage.pick(p.x, p.y); if (hit) drag.last = hit; }
-  };
-  wrap.addEventListener('pointerup', end, true);
-  wrap.addEventListener('pointercancel', end, true);
-  stage.onUserMove = () => { if (S.view !== 'free') { S.view = 'free'; renderViews(); } };
+  const max = maxHr(profile);
+  $('#paces').innerHTML = Object.entries(PACES).map(([k, p]) => {
+    const t = targetBpm(k, max);
+    const hr = t ? `<b>${t[0]}–${t[1]}</b>bpm` : `<b>${p.hr[0] * 100}–${p.hr[1] * 100}%</b>max HR`;
+    return `<button type="button" role="radio" aria-checked="${S.pace === k}" data-pace="${k}">
+      <span class="int">${p.intensity}</span>
+      <span class="nm">${p.name}${p.sub ? `<small>(${p.sub})</small>` : ''}</span>
+      <span class="hr">${hr}</span>
+      <span class="bl">${p.blurb}</span></button>`;
+  }).join('');
 
-  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; renderExport(); });
-  window.addEventListener('pagehide', () => saveNow());
-  document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
+  for (const el of $$('.stepper')) {
+    const k = el.dataset.key;
+    $('output', el).textContent = k === 'rounds' ? S[k] : fmtTime(S[k]);
+  }
+  const total = S.rounds * S.work + (S.rounds - 1) * S.rest;
+  $('#total').innerHTML = `<b>${fmtTime(total)}</b> total · ${fmtTime(S.rounds * S.work)} of work`;
+
+  $('#opt-calls').checked = S.calls;
+  $('#opt-voice').checked = S.voice;
+  $('#opt-beeps').checked = S.beeps;
+
+  $('#cut-box').hidden = S.pace !== 'hard';
+  if ($('#w-in').value !== String(S.wIn)) $('#w-in').value = S.wIn;
+  for (const b of $$('.unit button')) b.classList.toggle('on', b.dataset.unit === S.unit);
 }
 
-// ---------- start ----------
-async function boot() {
-  try { stage = new Stage($('#stage')); }
-  catch (e) {
-    console.error(e);
-    $('#stage-wrap').innerHTML = '<p class="empty" style="margin:24px;background:#141c3a">This browser can’t show 3D (WebGL is off or unsupported). Try Chrome on Android or a computer.</p>';
+$('#levels').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-level]'); if (!b) return;
+  S.level = +b.dataset.level; save(); renderTrain();
+});
+$('#paces').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-pace]'); if (!b) return;
+  S.pace = b.dataset.pace; applyPreset(); save(); renderTrain();
+});
+function applyPreset() {
+  const p = PACES[S.pace];
+  S.work = p.work; S.rest = p.rest; S.rounds = p.rounds;
+}
+$('#reset-intervals').addEventListener('click', () => { applyPreset(); save(); renderTrain(); });
+$('.steppers').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const k = b.closest('.stepper').dataset.key;
+  S[k] = clamp(S[k] + +b.dataset.d, ...LIMITS[k]); save(); renderTrain();
+});
+for (const k of ['calls', 'voice', 'beeps']) {
+  $('#opt-' + k).addEventListener('change', (e) => { S[k] = e.target.checked; save(); });
+}
+$('#w-in').addEventListener('input', (e) => { S.wIn = e.target.value; save(); });
+$('.unit').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-unit]'); if (!b) return;
+  S.unit = b.dataset.unit; save(); renderTrain();
+});
+
+// Weight cut rules have to be accepted once before the first hard session.
+const safety = $('#safety');
+let safetyThenStart = false;
+function openSafety(thenStart) {
+  safetyThenStart = thenStart;
+  $('#safety-ok').checked = S.cutOk;
+  $('#safety-go').disabled = !S.cutOk;
+  $('#safety-go').textContent = thenStart ? 'Start session' : 'Got it';
+  safety.showModal();
+}
+$('#open-safety').addEventListener('click', () => openSafety(false));
+$('#safety-ok').addEventListener('change', (e) => { $('#safety-go').disabled = !e.target.checked; });
+$('#safety-cancel').addEventListener('click', () => safety.close());
+$('#safety-go').addEventListener('click', () => {
+  S.cutOk = true; save(); safety.close();
+  if (safetyThenStart) startWorkout();
+});
+$('#start').addEventListener('click', () => {
+  if (S.pace === 'hard' && !S.cutOk) openSafety(true); else startWorkout();
+});
+
+// ---------- Sound ----------
+
+let actx = null;
+function audioInit() {
+  try {
+    actx ??= new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+  } catch { actx = null; }
+}
+function beep(freq, dur = 0.12, delay = 0, vol = 0.3) {
+  if (!S.beeps || !actx) return;
+  const t = actx.currentTime + delay;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = 'square'; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(actx.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+
+const synth = 'speechSynthesis' in window ? window.speechSynthesis : null;
+let voice = null;
+function pickVoice() {
+  const vs = synth?.getVoices() ?? [];
+  voice = vs.find((v) => v.lang === 'en-US' && v.default) || vs.find((v) => v.lang === 'en-US') ||
+    vs.find((v) => v.lang?.startsWith('en')) || null;
+}
+if (synth) { pickVoice(); synth.addEventListener?.('voiceschanged', pickVoice); }
+const RATE = { easy: 1.05, medium: 1.2, hard: 1.3 };
+function say(text) {
+  if (!S.voice || !synth) return;
+  synth.cancel(); // a late call must never queue behind an old one
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'en-US'; u.rate = RATE[S.pace]; u.volume = 1;
+  if (voice) u.voice = voice;
+  synth.speak(u);
+}
+
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && 'wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+    else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch { /* not allowed, carry on */ }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && W && !W.ended) keepAwake(true);
+});
+
+// ---------- Workout ----------
+
+let W = null;
+const wEl = $('#workout');
+
+function startWorkout() {
+  audioInit();
+  const phases = [{ type: 'prep', dur: 10 }];
+  for (let r = 1; r <= S.rounds; r++) {
+    phases.push({ type: 'work', dur: S.work, round: r });
+    if (r < S.rounds) phases.push({ type: 'rest', dur: S.rest, round: r });
+  }
+  const cfg = { level: S.level, pace: S.pace, work: S.work, rest: S.rest, rounds: S.rounds, calls: S.calls };
+  W = {
+    cfg, phases, i: -1, t0: now(), paused: false, pausedAt: 0, lastWhole: -1,
+    caller: makeCaller(S.level), nextCall: 0, calls: 0, spent: 0, roundsDone: 0,
+    hrSum: 0, hrN: 0, hrPeak: 0, ended: false,
+    total: phases.reduce((n, p) => n + p.dur, 0), elapsedBefore: 0,
+    target: targetBpm(S.pace, maxHr(profile)),
+  };
+  wEl.hidden = false; wEl.dataset.paused = '0';
+  $('#w-pause').textContent = 'Pause';
+  $('#w-meta').textContent = `L${S.level} · ${PACES[S.pace].name}`;
+  keepAwake(true);
+  enterPhase(0, now());
+  W.timer = setInterval(tick, 100);
+}
+
+function showCall(lines, cue, pop) {
+  const el = $('#w-call');
+  el.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
+  $('#w-cue').textContent = cue || '';
+  fitCall();
+  if (pop) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+}
+// Scale the call so the longest line fills the width without overflowing the stage.
+function fitCall() {
+  const el = $('#w-call'), stage = $('.w-stage');
+  if (wEl.hidden || !el.firstChild) return;
+  el.classList.remove('pop');
+  el.style.fontSize = '100px';
+  const r = el.getBoundingClientRect();
+  const availW = stage.clientWidth - 28;
+  const availH = stage.clientHeight - $('.w-phase').offsetHeight - $('#w-cue').offsetHeight - 44;
+  const scale = Math.min(availW / r.width, availH / r.height);
+  el.style.fontSize = clamp(100 * scale, 28, 260) + 'px';
+}
+addEventListener('resize', fitCall);
+
+function enterPhase(i, t0) {
+  W.i = i; W.t0 = t0; W.lastWhole = -1;
+  const p = W.phases[i];
+  const pace = PACES[W.cfg.pace];
+  wEl.dataset.phase = p.type;
+  const last = p.round === W.cfg.rounds;
+  if (p.type === 'prep') {
+    $('#w-round').textContent = 'Get ready';
+    $('#w-phase').textContent = 'STARTS IN';
+    showCall(['STANCE'], 'Feet under you, hips low, hands ready');
+    say('Get in your stance');
+  } else if (p.type === 'work') {
+    $('#w-round').textContent = `Round ${p.round}/${W.cfg.rounds}`;
+    $('#w-phase').textContent = last ? 'LAST ROUND' : 'WORK';
+    beep(880, 0.45);
+    if (W.cfg.calls) {
+      showCall(['GO'], 'Stance and motion');
+      if (last && W.cfg.rounds > 1) say('Last round');
+      W.nextCall = last && W.cfg.rounds > 1 ? 1.5 : 0.5;
+    } else {
+      showCall(['GO'], 'All out until the whistle', true);
+      say(last && W.cfg.rounds > 1 ? 'Last round. Go' : 'Go');
+    }
+  } else {
+    $('#w-round').textContent = `Round ${p.round}/${W.cfg.rounds}`;
+    $('#w-phase').textContent = W.cfg.pace === 'hard' ? 'ACTIVE REST' : 'REST';
+    showCall(['REST'], pace.restCue, true);
+    beep(440, 0.18); beep(440, 0.18, 0.25);
+    say('Rest');
+  }
+  W.label = $('#w-phase').textContent;
+  paint();
+}
+
+function leavePhase(elapsed) {
+  const p = W.phases[W.i];
+  W.elapsedBefore += p.dur; // progress bar treats a skipped phase as done
+  if (p.type !== 'prep') W.spent += Math.min(elapsed, p.dur);
+  if (p.type === 'work' && elapsed >= p.dur * 0.5) W.roundsDone++;
+}
+
+function tick() {
+  if (!W || W.paused || W.ended) return;
+  const p = W.phases[W.i];
+  const el = now() - W.t0;
+  const rem = p.dur - el;
+  if (rem <= 0) {
+    leavePhase(p.dur);
+    if (W.i + 1 >= W.phases.length) return finish(true);
+    return enterPhase(W.i + 1, W.t0 + p.dur); // carry the exact boundary so time never drifts
+  }
+  const whole = Math.ceil(rem);
+  if (whole !== W.lastWhole) {
+    W.lastWhole = whole;
+    if (whole <= 3) beep(660, 0.09);
+    sampleHr(p);
+    paint();
+  }
+  if (p.type === 'work' && W.cfg.calls && el >= W.nextCall && rem > 1.3) {
+    const m = W.caller(rem);
+    if (m.t <= rem + 0.4) {
+      W.calls++;
+      showCall(m.lines, m.cue, true);
+      say(m.say);
+    }
+    W.nextCall = el + m.t + gapFor(W.cfg.pace);
+  }
+}
+
+function paint() {
+  const p = W.phases[W.i];
+  const el = W.paused ? W.pausedAt - W.t0 : now() - W.t0;
+  const rem = clamp(p.dur - el, 0, p.dur);
+  $('#w-time').textContent = fmtTime(Math.ceil(rem));
+  const done = W.elapsedBefore + (p.dur - rem);
+  $('#w-progress').style.width = (done / W.total) * 100 + '%';
+  $('#w-left').textContent = `${fmtTime(W.total - done)} left`;
+  paintHr();
+}
+
+function paintHr() {
+  const chip = $('#w-hr');
+  chip.hidden = !ble.bpm;
+  if (!ble.bpm || !W) return;
+  $('#w-bpm').textContent = ble.bpm;
+  const z = zoneFor(ble.bpm, maxHr(profile));
+  let txt = z ? `Z${z}` : 'bpm';
+  if (W.target && W.phases[W.i].type === 'work') {
+    txt += ble.bpm < W.target[0] ? ' · push' : ble.bpm > W.target[1] ? ' · ease off' : ' · on target';
+  }
+  $('#w-zone').textContent = txt;
+}
+function sampleHr(p) {
+  if (!ble.bpm || p.type === 'prep') return;
+  W.hrSum += ble.bpm; W.hrN++; W.hrPeak = Math.max(W.hrPeak, ble.bpm);
+}
+
+function setPaused(on) {
+  if (!W || W.paused === on) return;
+  W.paused = on;
+  if (on) { W.pausedAt = now(); synth?.cancel(); } else { W.t0 += now() - W.pausedAt; }
+  wEl.dataset.paused = on ? '1' : '0';
+  $('#w-pause').textContent = on ? 'Resume' : 'Pause';
+  $('#w-phase').textContent = on ? 'PAUSED' : W.label;
+}
+$('#w-pause').addEventListener('click', () => { audioInit(); setPaused(!W.paused); });
+$('#w-skip').addEventListener('click', () => {
+  if (!W) return;
+  const wasPaused = W.paused;
+  if (wasPaused) setPaused(false);
+  leavePhase(now() - W.t0);
+  if (W.i + 1 >= W.phases.length) return finish(true);
+  enterPhase(W.i + 1, now());
+});
+$('#w-end').addEventListener('click', () => {
+  if (!W) return;
+  setPaused(true);
+  if (confirm('End this session now?')) {
+    leavePhase(W.pausedAt - W.t0);
+    finish(false);
+  } else setPaused(false);
+});
+
+// ---------- Finish and log ----------
+
+let pending = null;
+function finish(completed) {
+  clearInterval(W.timer);
+  W.ended = true;
+  synth?.cancel();
+  keepAwake(false);
+  wEl.hidden = true;
+  if (W.spent < 5) { W = null; return; } // quit during the countdown: nothing to save
+  if (completed) { beep(880, 0.2); beep(880, 0.2, 0.3); beep(1175, 0.6, 0.6); say('Time. Good work.'); }
+
+  const c = W.cfg;
+  pending = {
+    ts: Date.now(), ...c, completed, seconds: Math.round(W.spent), roundsDone: W.roundsDone, callCount: W.calls,
+    avgHr: W.hrN ? Math.round(W.hrSum / W.hrN) : null, peakHr: W.hrPeak || null,
+    unit: S.unit, wIn: c.pace === 'hard' && +S.wIn > 0 ? +S.wIn : null, wOut: null, pulse: null,
+  };
+  $('#d-title').textContent = completed ? 'Time' : 'Stopped';
+  $('#d-sub').textContent = `Level ${c.level} · ${PACES[c.pace].intensity}: ${PACES[c.pace].name}`;
+  const cells = [[fmtTime(pending.seconds), 'Time'], [`${pending.roundsDone}/${c.rounds}`, 'Rounds']];
+  if (c.calls) cells.push([pending.callCount, 'Calls']);
+  if (pending.avgHr) cells.push([pending.avgHr, 'Avg bpm'], [pending.peakHr, 'Peak bpm']);
+  $('#d-stats').innerHTML = cells.map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+
+  $('#d-weight').hidden = c.pace !== 'hard';
+  $('#w-out').value = ''; $('#w-out-unit').textContent = S.unit; $('#d-loss').innerHTML = '';
+  pulseReset('done');
+  $('#done').hidden = false; $('#done').scrollTop = 0;
+  W = null;
+}
+
+function renderLoss() {
+  const before = pending?.wIn, after = +$('#w-out').value;
+  const out = $('#d-loss');
+  if (!(after > 0)) { out.innerHTML = ''; return; }
+  if (!before) { out.innerHTML = '<p class="fine">Enter a weight before the session next time to see how much you lost.</p>'; return; }
+  const r = weightLoss(before, after);
+  const u = pending.unit;
+  let drink = '';
+  if (r.lost > 0) {
+    drink = u === 'kg'
+      ? `After you weigh in, drink about ${(r.lost * 1.25).toFixed(1)}–${(r.lost * 1.5).toFixed(1)} L with something salty.`
+      : `After you weigh in, drink about ${Math.round(r.lost * 20)}–${Math.round(r.lost * 24)} oz with something salty.`;
+  }
+  out.innerHTML = `<div class="loss ${r.level}"><b>${r.lost >= 0 ? '−' : '+'}${Math.abs(r.lost).toFixed(1)} ${u} · ${Math.abs(r.pct).toFixed(1)}%</b>
+    <p>${r.note}</p>${drink ? `<p class="fine">${drink}</p>` : ''}</div>`;
+}
+$('#w-out').addEventListener('input', renderLoss);
+
+$('#d-save').addEventListener('click', () => {
+  if (pending) {
+    const after = +$('#w-out').value;
+    if (after > 0) pending.wOut = after;
+    pending.pulse = pulses.done ?? null;
+    log.unshift(pending); log = log.slice(0, 300);
+    store.set('log', log); pending = null;
+  }
+  $('#done').hidden = true;
+  renderLog();
+});
+
+function renderLog() {
+  const week = Date.now() - 7 * 864e5;
+  const mins = Math.round(log.reduce((n, e) => n + e.seconds, 0) / 60);
+  $('#log-stats').innerHTML = [[log.length, 'Sessions'], [log.filter((e) => e.ts > week).length, 'Last 7 days'], [mins, 'Minutes']]
+    .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+  $('#log-clear').hidden = !log.length;
+  if (!log.length) {
+    $('#log-list').innerHTML = '<p class="empty">Nothing yet. Finish a session and it shows up here.</p>';
     return;
   }
-  comp = new Compositor();
-  HI = stage.maxTex >= 8192 && (navigator.deviceMemory || 8) >= 4 ? 4096 : 2048;
-  wire();
-  let rec = null;
-  try {
-    const id = await store.getMeta('current');
-    rec = id ? await store.getDesign(id) : null;
-    if (!rec) { const list = await store.listDesigns(); if (list.length) rec = await store.getDesign(list[0].id); }
-  } catch (e) { console.warn('storage unavailable', e); }
-  if (rec) await openRecord(rec);
-  else { S.design = newDesign('Drop 01', true); S.assets = {}; afterOpen(); saveNow(); }
-  document.fonts.ready.then(() => { clearTextCache(); queueTex(); });
-  window.__drop = { S, stage, actions, paintNow, addImages };
+  $('#log-list').innerHTML = log.map((e) => {
+    const p = PACES[e.pace];
+    const d = new Date(e.ts);
+    const when = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ', ' +
+      d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const nums = [`${fmtTime(e.seconds)}`, `${e.roundsDone}/${e.rounds} rounds of ${e.work}s/${e.rest}s`];
+    if (e.calls) nums.push(`${e.callCount} calls`);
+    if (e.avgHr) nums.push(`avg ${e.avgHr}, peak ${e.peakHr} bpm`);
+    if (e.pulse) nums.push(`pulse ${e.pulse}`);
+    if (e.wIn && e.wOut) {
+      const r = weightLoss(e.wIn, e.wOut);
+      nums.push(`${e.wIn} → ${e.wOut} ${e.unit} (${r.pct.toFixed(1)}%)`);
+    }
+    return `<div class="entry" style="--c: var(--${e.pace})"><div class="when">${when}</div>
+      <div class="what">Level ${e.level} · ${p.name}${e.completed ? '' : ' (stopped early)'}</div>
+      <div class="nums">${nums.join(' · ')}</div></div>`;
+  }).join('');
 }
-boot();
+$('#log-clear').addEventListener('click', () => {
+  if (confirm('Delete every saved session?')) { log = []; store.set('log', log); renderLog(); }
+});
 
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+// ---------- Heart rate tab ----------
+
+function renderHr() {
+  const max = maxHr(profile);
+  const rest = profile.rest >= 30 && profile.rest <= 110 ? profile.rest : null;
+  $('#hr-summary').textContent = !max
+    ? 'Enter your age to see your numbers in beats per minute.'
+    : profile.knownMax >= 120 ? `Using your own max of ${max} bpm.`
+      : `Estimated max: ${max} bpm (208 − 0.7 × age). Real max can be 10 or more beats either side.`;
+  $('#zones').innerHTML = ZONES.map((z) => {
+    const pct = `${z.lo * 100}–${z.hi * 100}%`;
+    let bp = `<div class="bp">${pct}<small>of max</small></div>`;
+    if (max) {
+      bp = `<div class="bp">${pctOfMax(max, z.lo)}–${pctOfMax(max, z.hi)}<small>${
+        rest ? `reserve: ${pctOfReserve(max, rest, z.lo)}–${pctOfReserve(max, rest, z.hi)}` : pct}</small></div>`;
+    }
+    return `<div class="zone z${z.n}"><div class="n">${z.n}</div><div class="nm">${z.name}</div>${bp}<div class="fl">${z.feel}</div></div>`;
+  }).join('');
+  $('#pace-targets').innerHTML = Object.entries(PACES).map(([k, p]) => {
+    const t = targetBpm(k, max);
+    return `<div class="pt"><div>${p.intensity}: ${p.name}</div><b>${t ? `${t[0]}–${t[1]} bpm` : `${p.hr[0] * 100}–${p.hr[1] * 100}%`}</b>
+      <span>${p.blurb}</span></div>`;
+  }).join('');
+}
+for (const [id, key] of [['hr-age', 'age'], ['hr-rest', 'rest'], ['hr-max', 'knownMax']]) {
+  const el = $('#' + id);
+  el.value = profile[key] ?? '';
+  el.addEventListener('input', () => {
+    profile[key] = el.value === '' ? null : +el.value;
+    store.set('profile', profile); renderHr(); renderTrain();
+  });
+}
+
+// Tap-along pulse counter.
+const pulses = {};
+const taps = {};
+function pulseReset(id) {
+  taps[id] = []; delete pulses[id];
+  $(`[data-pulse-out="${id}"] b`).textContent = '—';
+}
+for (const btn of $$('[data-pulse]')) {
+  const id = btn.dataset.pulse;
+  taps[id] = [];
+  btn.addEventListener('pointerdown', () => {
+    const t = now(), a = taps[id];
+    if (a.length && t - a[a.length - 1] > 3) a.length = 0; // long gap: start over
+    a.push(t);
+    if (a.length > 12) a.shift();
+    if (a.length >= 4) {
+      const bpm = Math.round(60 * (a.length - 1) / (a[a.length - 1] - a[0]));
+      if (bpm >= 30 && bpm <= 240) {
+        pulses[id] = bpm;
+        $(`[data-pulse-out="${id}"] b`).textContent = bpm;
+      }
+    }
+  });
+}
+
+// Bluetooth heart rate strap (standard heart_rate service).
+const ble = { bpm: null, device: null };
+function bleStatus(msg) { $('#ble-status').textContent = msg; }
+if (!navigator.bluetooth) {
+  $('#ble-connect').hidden = true;
+  $('#ble-note').textContent = 'This browser cannot talk to Bluetooth heart rate straps. Chrome on Android or a computer can. You can still tap your pulse above.';
+}
+$('#ble-connect').addEventListener('click', async () => {
+  if (ble.device?.gatt?.connected) { ble.device.gatt.disconnect(); return; }
+  try {
+    bleStatus('Looking for monitors…');
+    const device = await navigator.bluetooth.requestDevice({ filters: [{ services: ['heart_rate'] }] });
+    ble.device = device;
+    device.addEventListener('gattserverdisconnected', () => {
+      ble.bpm = null; bleStatus('Disconnected.'); $('#ble-connect').textContent = 'Connect heart rate monitor';
+      if (W) paintHr();
+    });
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService('heart_rate');
+    const ch = await service.getCharacteristic('heart_rate_measurement');
+    ch.addEventListener('characteristicvaluechanged', (e) => {
+      const v = e.target.value;
+      ble.bpm = v.getUint8(0) & 1 ? v.getUint16(1, true) : v.getUint8(1);
+      bleStatus(`${device.name || 'Monitor'}: ${ble.bpm} bpm`);
+      if (W) paintHr();
+    });
+    await ch.startNotifications();
+    $('#ble-connect').textContent = 'Disconnect';
+    bleStatus(`${device.name || 'Monitor'} connected. Waiting for a reading…`);
+  } catch (err) {
+    bleStatus(err.name === 'NotFoundError' ? 'No monitor picked.' : 'Could not connect. Make sure the strap is on and awake.');
+  }
+});
+
+// ---------- Guide, tabs, install ----------
+
+$('#guide').innerHTML = GUIDE.map((g) =>
+  `<details${g.open ? ' open' : ''}><summary>${g.title}</summary><div class="body">${g.html}</div></details>`).join('');
+
+$('.tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tab]'); if (!b) return;
+  for (const t of $$('.tabs button')) t.classList.toggle('on', t === b);
+  for (const v of $$('.view')) v.hidden = v.id !== 'view-' + b.dataset.tab;
+  scrollTo(0, 0);
+});
+
+renderTrain(); renderHr(); renderLog();
+
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}

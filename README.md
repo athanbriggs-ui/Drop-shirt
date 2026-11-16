@@ -1,44 +1,63 @@
-# Drop Studio
+# Stance & Motion
 
-3D clothing mockups on your phone. Put your art on a garment, see it from every side, and export the photos, videos and colorway sheets you need to show a drop before it's made. No account, no subscription, works offline once it's installed.
+A wrestling stance and motion caller. Pick a level and a pace, prop your phone up, and it calls moves out loud while it runs your work and rest intervals. It installs to a phone's home screen and works offline.
 
 ## What it does
 
-- **Garments:** T-shirt, oversized tee, long sleeve, crewneck, hoodie (hood, drawstrings, kangaroo pocket) and tank top, each with real collars, ribbed cuffs and hems, and hem stitching.
-- **Fabric and wash:** jersey cotton, heavyweight or fleece; clean, vintage wash or acid wash. 25 apparel colors (heather grays have a real heather texture) or any custom color.
-- **Your art:** add PNG, JPG, SVG or WebP files and text. Put art on the front or back, then drag it on the shirt to move it and pinch to resize and turn. Placement presets for center chest, left chest, full front, upper back, full back, sleeve and lower hem. Size shows the real print width in inches.
-- **Print finishes:** screen print, puff (raised), embroidery (satin stitch texture) and distressed (cracked vintage print).
-- **Image tools:** remove a plain background (the white box around a logo is cleared automatically), recolor a one-color logo to any ink color, flip.
-- **Text:** 9 fonts including heavy condensed, gothic blackletter, marker and script; ink color, outline, letter spacing and curved (arched) text.
-- **Scene:** 8 backdrops plus custom color or transparent; studio, dramatic, sunlight and catalog lighting; shadow on the floor, on a wall or none. Front, back, angle, side and close-up views, plus a slow spin.
-- **Export:** photos (square, 4:5, 9:16 story, 16:9) up to 2560 px with optional transparent background; turntable, sway, front-to-back and push-in videos (MP4 on Chrome); and a colorway sheet showing your design in up to 6 colors. Share straight to Instagram, TikTok or Messages from the share sheet, or save to the device.
-- **Designs:** every change is saved on the device. Keep as many designs as you like, duplicate them, and pick up where you left off. Undo and redo.
+**Three levels**
 
-## Put it on GitHub (same as Macro Lens)
+| Level | Calls |
+| --- | --- |
+| 1 | shot, sprawl, down block, shot re-shot |
+| 2 | Level 1 plus fake-club-shot, club shot, circle hard left, circle hard right |
+| 3 | Level 2 plus named shots (double, single, high crotch, sweep single, low single) and 22 combos |
 
-1. Unzip `drop-studio.zip` on your computer.
-2. On github.com, click **+ → New repository**, name it `Drop-Studio`, keep it **Public**, and click **Create repository**.
-3. Click **uploading an existing file**, then drag **everything inside** the unzipped `drop-studio` folder (the `index.html` file and the `css`, `fonts`, `icons`, `js` and `vendor` folders) into the page. Click **Commit changes**.
-4. Open **Settings → Pages**. Under **Branch**, pick `main` and `/ (root)`, then **Save**.
-5. After a minute the app is live at `https://YOUR-USERNAME.github.io/Drop-Studio/` (for the account that has Macro Lens: `https://athanbriggs-ui.github.io/Drop-Studio/`).
+**Three paces**
 
-## Install on Android
+| Intensity | Name | Default | Calls | Target heart rate |
+| --- | --- | --- | --- | --- |
+| Easy | Warm up | 6 × 30s on / 30s off | every 4–6 s | 60–75% of max |
+| Medium | Conditioning | 12 × 30s on / 30s off | every 2–4 s | 80–90% of max |
+| Hard | Weight cut (water loss) | 20 × 40s on / 20s off | nearly back to back | 85–95% of max |
 
-Open the site in Chrome, tap the ⋮ menu, then **Add to home screen → Install**. It opens full screen like any app and works without a connection. There's also an **Install** button at the bottom of the Export tab when Chrome offers it.
+Work, rest and rounds can all be changed. Turn off **Call moves** to use it as a plain interval timer.
 
-## Updating it later
+**Also**
 
-Change the files, then bump `VERSION` at the top of `sw.js` (for example `dropstudio-v2`) so phones pick up the new version. Open the app twice to load it.
+- Voice calls, whistle beeps and a 3-2-1 countdown; the screen stays awake during a session.
+- Heart rate zones from your age (208 − 0.7 × age), with heart rate reserve zones if you add a resting heart rate.
+- Tap-along pulse counter, and live heart rate from a Bluetooth chest strap (Chrome on Android or desktop).
+- Weight before and after for weight cut sessions, with the percent lost, a warning past 2%, and how much to drink back.
+- A log of every finished session, saved on the device.
+- A guide tab with the research behind the numbers and links to the sources.
 
-## Selling it
+## Put it online (GitHub Pages)
 
-It's named Drop Studio rather than Mockwear so you can publish it without using someone else's brand. To list it on Google Play later, the live GitHub Pages site can be wrapped as an Android app with [PWABuilder](https://www.pwabuilder.com) (free; Google charges a one-time $25 developer fee).
+The app is plain HTML, CSS and JavaScript with no build step.
 
-## Credits
+1. Get these files onto the `main` branch.
+2. In the repository, open **Settings → Pages**. Under **Branch**, choose `main` and `/ (root)`, then **Save**.
+3. A minute later it is live at `https://athanbriggs-ui.github.io/Drop-shirt/`.
 
-- 3D: [three.js](https://threejs.org) r186 (MIT), bundled in `vendor/three/`.
-- Triangulation: [Delaunator](https://github.com/mapbox/delaunator) (ISC), bundled in `vendor/`.
-- Fonts (SIL Open Font License, copies in `fonts/licenses/`): Anton, Bebas Neue, Archivo Black, UnifrakturMaguntia, Permanent Marker, Pacifico, Playfair Display, Rubik Mono One, Space Mono, Big Shoulders Display and Instrument Sans, via [Fontsource](https://fontsource.org).
-- Garment shapes are generated in code: each flat pattern is filled with a triangle mesh and inflated with a Poisson solve, so sleeves and body get natural rounded volume.
+## Install it as an app
 
-Video recording uses the browser's built-in recorder: Chrome on Android and desktop Chrome save MP4, some other browsers save WebM, and a few can't record (photos and colorway sheets still work there).
+- **Android:** open the site in Chrome, tap ⋮, then **Add to Home screen → Install**.
+- **iPhone:** open the site in Safari, tap Share, then **Add to Home Screen**.
+
+After the first visit it works with no connection.
+
+## Updating
+
+Change the files, then bump `VERSION` at the top of `sw.js` (for example `stance-v2`) so installed phones pick up the new version.
+
+## Files
+
+- `index.html`, `css/app.css`: screens and styling
+- `js/data.js`: moves, levels, paces, heart rate and weight maths
+- `js/app.js`: timer, voice caller, heart rate monitor, log
+- `js/guide.js`: guide text and sources
+- `sw.js`, `manifest.webmanifest`, `icons/`: offline and install support
+
+## Safety
+
+Sweating off water weight is risky. The app requires reading the weight cut rules before the first hard session, and it is a training tool, not medical advice.

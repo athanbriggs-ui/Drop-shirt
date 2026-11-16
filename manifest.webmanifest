@@ -1,37 +1,18 @@
 {
-  "name": "Drop Studio",
-  "short_name": "Drop Studio",
-  "description": "3D clothing mockups on your phone. Put your art on a tee, hoodie or crewneck and export photos, videos and colorway sheets.",
+  "name": "Stance & Motion",
+  "short_name": "Stance",
+  "description": "Wrestling stance and motion caller with interval timer, heart rate zones and weight tracking.",
   "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#141C3A",
-  "theme_color": "#141C3A",
-  "categories": [
-    "design",
-    "productivity",
-    "shopping"
-  ],
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "categories": ["sports", "fitness", "health"],
   "icons": [
-    {
-      "src": "icons/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icons/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icons/maskable-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
