@@ -188,6 +188,7 @@ function say(text) {
 
 let wakeLock = null;
 async function keepAwake(on) {
+  if (window.Native) { window.Native.keepAwake(on); return; } // Android app: the native side holds the screen on
   try {
     if (on && 'wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
     else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
@@ -424,7 +425,7 @@ $('#d-save').addEventListener('click', () => {
     const after = +$('#w-out').value;
     if (after > 0) pending.wOut = after;
     pending.pulse = pulses.done ?? null;
-    log.unshift(pending); log = log.slice(0, 300); syncNudgeState();
+    log.unshift(pending); log = log.slice(0, 300); syncNudgeState(); Native?.sessionDone();
     store.set('log', log); pending = null;
   }
   $('#done').hidden = true;
@@ -569,6 +570,8 @@ $('.tabs').addEventListener('click', (e) => {
 
 // ---------- Nudges ----------
 
+// Inside the Android app, `Native` is the bridge to the background watcher that does the real detecting.
+const Native = window.Native ?? null;
 const N = Object.assign({ on: false, from: 15, to: 21, every: 60, open: true, still: true, bg: true, last: 0 }, store.get('nudge', {}));
 const STILL_MIN = 20;
 const hasSW = 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost');
@@ -578,11 +581,15 @@ const inHours = () => {
   const h = new Date().getHours();
   return N.from <= N.to ? h >= N.from && h < N.to : h >= N.from || h < N.to;
 };
-const nudgeDue = () => N.on && !W && !pending && !trainedToday() && inHours() && Date.now() - N.last > N.every * 60000;
+const nudgeDue = () => !Native && N.on && !W && !pending && !trainedToday() && inHours() && Date.now() - N.last > N.every * 60000;
 
 // The service worker cannot read localStorage, so the settings it needs go into a cache entry.
 async function syncNudgeState() {
   store.set('nudge', N);
+  if (Native) {
+    for (const [k, v] of [['on', N.on], ['from', N.from], ['to', N.to], ['every', N.every], ['pickup', N.open], ['still', N.still], ['social', N.bg]]) Native.set(k, String(v));
+    return;
+  }
   if (!('caches' in window)) return;
   try {
     const state = { on: N.on, bg: N.bg, from: N.from, to: N.to, every: N.every, last: N.last, lastSession: log[0]?.ts ?? 0, lines: [NUDGE_TEXT] };
@@ -626,7 +633,7 @@ function onMotion(e) {
   prevAcc = { x: a.x, y: a.y, z: a.z };
 }
 async function motionStart(askPermission) {
-  if (motionOn || !('DeviceMotionEvent' in window)) return;
+  if (Native || motionOn || !('DeviceMotionEvent' in window)) return;
   try {
     if (typeof DeviceMotionEvent.requestPermission === 'function') {
       if (!askPermission) return; // iPhones only allow asking from a tap
@@ -663,6 +670,7 @@ async function renderNudge() {
   $('#n-on').checked = N.on; $('#n-open').checked = N.open; $('#n-still').checked = N.still; $('#n-bg').checked = N.bg;
   $('#n-from').value = N.from; $('#n-to').value = N.to; $('#n-every').value = N.every;
   $('#n-body').dataset.off = N.on ? '0' : '1';
+  if (Native) return renderNativeNudge();
   const bg = await bgSync();
   const perm = 'Notification' in window ? Notification.permission : 'none';
   const rows = [
@@ -679,8 +687,36 @@ async function renderNudge() {
   ];
   $('#n-status').innerHTML = rows.map(([c, t, d]) => `<div class="st ${c}"><i></i><b>${t}</b><span>${d}</span></div>`).join('');
 }
+// Android app: same switches, but they drive the background watcher.
+function renderNativeNudge() {
+  const st = JSON.parse(Native.getState());
+  $('#n-apk').hidden = true;
+  $('#n-open-t').textContent = 'Unlocking my phone';
+  $('#n-open-note').textContent = 'A notification the moment you unlock it';
+  $('#n-still-t').textContent = 'Sitting on my phone';
+  $('#n-still-note').textContent = `Screen on for ${st.stillMin} minutes without you getting up and moving`;
+  $('#n-bg-t').textContent = 'On social media';
+  $('#n-bg-note').textContent = `${st.socialMin} minutes straight in Instagram, TikTok, Snapchat, YouTube, X, Facebook, Reddit, Threads or Twitch`;
+  $('#n-fine').textContent = 'Works with the app closed. While nudges are on, Android shows a small permanent "Nudges are on" notification: that is what keeps the watcher alive.';
+  const rows = [
+    st.notif ? ['yes', 'Notifications', 'Allowed.'] : ['no', 'Notifications', 'Needed to send nudges.', 'notif', 'Allow notifications'],
+    st.usage ? ['yes', 'App usage access', 'Allowed. Used only on this phone to see which app is on screen.']
+      : ['no', 'App usage access', 'Needed to notice social media. Find Stance & Motion in the list and switch it on.', 'usage', 'Open the setting'],
+    st.running ? ['yes', 'Background watcher', 'Running.'] : ['', 'Background watcher', 'Off. Turn on "Nudge me" to start it.'],
+  ];
+  $('#n-status').innerHTML = rows.map(([c, t, d, act, label]) =>
+    `<div class="st ${c}"><i></i><b>${t}</b><span>${d}</span>${act ? `<button type="button" class="link" data-act="${act}">${label}</button>` : ''}</div>`).join('');
+}
+$('#n-status').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'notif') Native.requestNotifications();
+  if (act === 'usage') Native.openUsageAccess();
+});
+window.onNativeResume = () => renderNudge(); // coming back from a settings screen
+
 $('#n-on').addEventListener('change', async (e) => {
   N.on = e.target.checked;
+  if (N.on && Native) Native.requestNotifications();
   if (N.on) {
     if ('Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
     if (N.still) await motionStart(true);
@@ -697,7 +733,7 @@ for (const [id, key] of [['n-open', 'open'], ['n-still', 'still'], ['n-bg', 'bg'
 for (const [id, key] of [['n-from', 'from'], ['n-to', 'to'], ['n-every', 'every']]) {
   $('#' + id).addEventListener('change', async (e) => { N[key] = +e.target.value; await syncNudgeState(); renderNudge(); });
 }
-$('#n-test').addEventListener('click', () => fireNudge(true));
+$('#n-test').addEventListener('click', () => (Native ? Native.testNudge() : fireNudge(true)));
 
 renderTrain(); renderHr(); renderLog();
 // Decode the coach clips up front so the first line of a session is already the coach.

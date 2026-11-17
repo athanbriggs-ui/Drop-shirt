@@ -1,0 +1,25 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.stancemotion'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'app.stancemotion'
+        minSdk 26
+        // 33 keeps the background watcher simple: no foreground-service type declaration needed.
+        targetSdk 33
+        versionCode 1
+        versionName '1.0'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}

@@ -119,16 +119,21 @@
 
         <h2>What sets it off</h2>
         <div class="toggles">
-          <label><input type="checkbox" id="n-open"><span>Picking up my phone</span><small>Calls you out the moment this app comes back on screen</small></label>
-          <label><input type="checkbox" id="n-still"><span>Phone sitting still</span><small id="n-still-note">No movement for 20 minutes while the app is open</small></label>
-          <label><input type="checkbox" id="n-bg"><span>Background check-ins</span><small id="n-bg-note">Notifications while the app is closed</small></label>
+          <label><input type="checkbox" id="n-open"><span id="n-open-t">Picking up my phone</span><small id="n-open-note">Calls you out the moment this app comes back on screen</small></label>
+          <label><input type="checkbox" id="n-still"><span id="n-still-t">Phone sitting still</span><small id="n-still-note">No movement for 20 minutes while the app is open</small></label>
+          <label><input type="checkbox" id="n-bg"><span id="n-bg-t">Background check-ins</span><small id="n-bg-note">Notifications while the app is closed</small></label>
         </div>
 
         <button type="button" class="btn" id="n-test">Send a test nudge</button>
 
         <h2>What this phone allows</h2>
         <div class="card" id="n-status"></div>
-        <p class="fine">A website app cannot see which other apps you are in or when your screen turns on, so it cannot catch you on social media. Phones only give that to store apps with a special permission. To cover the gap, set your phone's own screen time limit on those apps and let the nudges here do the rest.</p>
+        <p class="fine" id="n-fine">In a browser, nudges only work while this page is open: a website cannot see your other apps, your screen turning on, or movement once it is closed.</p>
+        <div class="card" id="n-apk">
+          <h3>Nudges with the app closed</h3>
+          <p>The Android app watches in the background. It notices when you unlock your phone, when you sit on it without moving, and when you are stuck in social media, then sends a notification.</p>
+          <a class="btn" href="https://github.com/athanbriggs-ui/Drop-shirt/releases/download/apk-latest/stance-and-motion.apk">Download the Android app</a>
+        </div>
       </div>
     </section>
 

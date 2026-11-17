@@ -59,9 +59,19 @@ Recorded coach lines replace the phone's built-in voice. Each of the 34 lines th
 
 The interface is plain grey. Picking a level tints the whole app slightly: blue for Level 1, green for Level 2, red for Level 3.
 
-## What nudges cannot do
+## Android app (nudges with the app closed)
 
-A website app cannot see which other apps are open, cannot tell when the screen turns on, and cannot read the motion sensor while it is closed. Catching someone on social media needs a store-installed Android app with the Usage Access permission.
+A browser cannot see other apps, the screen turning on, or movement once the page is closed. The `android/` folder holds a small Android app that can. It shows this same site full screen and runs a background watcher that sends a notification, on days with no session and inside your chosen hours, when:
+
+- you unlock the phone,
+- the screen has been on for 20 minutes without the phone really moving (walking or drilling), or
+- you have spent 5 minutes straight in Instagram, TikTok, Snapchat, YouTube, X, Facebook, Reddit, Threads or Twitch.
+
+**Install:** on the phone, open the Nudges tab and tap **Download the Android app** (or get `stance-and-motion.apk` from the repository's Releases page). Android will ask you to allow installing from your browser. Then open the app, go to Nudges, turn on **Nudge me**, allow notifications, and allow **App usage access** when asked.
+
+**How it is built:** the "Android app" GitHub Actions workflow builds the APK and publishes it to the `apk-latest` release whenever `android/` changes. Each build is signed with a fresh debug key, so to install a newer APK you must uninstall the old one first. Changes to the web files reach the Android app without a new APK.
+
+**Limits:** Android only (iPhones do not allow this). Usage data never leaves the phone. Some phones (Samsung, Xiaomi, OnePlus) stop background apps aggressively; if nudges stop, set the app's battery use to "Unrestricted". The Bluetooth heart rate strap does not work inside the Android app; use the website in Chrome for that.
 
 ## Files
 
@@ -71,6 +81,7 @@ A website app cannot see which other apps are open, cannot tell when the screen 
 - `js/guide.js`: guide text and sources
 - `js/clips.js`, `audio/`: recorded coach lines
 - `sw.js`, `manifest.webmanifest`, `icons/`: offline, install and background nudges
+- `android/`, `.github/workflows/android.yml`: the Android app and its build
 
 ## Safety
 
