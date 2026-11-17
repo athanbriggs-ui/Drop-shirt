@@ -49,7 +49,7 @@ After the first visit it works with no connection.
 
 ## Updating
 
-Change the files, then bump `VERSION` at the top of `sw.js` (for example `stance-v5`) so installed phones pick up the new version.
+Change the files, then bump `VERSION` at the top of `sw.js` (for example `stance-v7`) so installed phones pick up the new version.
 
 ## Coach voice
 
@@ -71,7 +71,9 @@ A browser cannot see other apps, the screen turning on, or movement once the pag
 
 **How it is built:** the "Android app" GitHub Actions workflow builds the APK and publishes it to the `apk-latest` release whenever `android/` changes. Each build is signed with a fresh debug key, so to install a newer APK you must uninstall the old one first. Changes to the web files reach the Android app without a new APK.
 
-**Limits:** Android only (iPhones do not allow this). Usage data never leaves the phone. Some phones (Samsung, Xiaomi, OnePlus) stop background apps aggressively; if nudges stop, set the app's battery use to "Unrestricted". The Bluetooth heart rate strap does not work inside the Android app; use the website in Chrome for that.
+**iPhone:** there is no iPhone app. Open the site in Safari and use Share → Add to Home Screen; everything works, but nudges only fire while the app is open. A real iPhone app would need a Mac and a paid Apple Developer account, and Apple would still not allow unlock or sitting-still detection.
+
+**Limits:** Android only. Usage data never leaves the phone. Some phones (Samsung, Xiaomi, OnePlus) stop background apps aggressively; if nudges stop, set the app's battery use to "Unrestricted". The Bluetooth heart rate strap does not work inside the Android app; use the website in Chrome for that.
 
 ## Files
 

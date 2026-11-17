@@ -671,6 +671,11 @@ async function renderNudge() {
   $('#n-from').value = N.from; $('#n-to').value = N.to; $('#n-every').value = N.every;
   $('#n-body').dataset.off = N.on ? '0' : '1';
   if (Native) return renderNativeNudge();
+  if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+    $('#n-apk').hidden = true;
+    $('#n-bg').closest('label').hidden = true;
+    $('#n-fine').textContent = 'On an iPhone, nudges only fire while this app is open. Apple does not let an app like this see unlocking, movement or your other apps in the background.';
+  }
   const bg = await bgSync();
   const perm = 'Notification' in window ? Notification.permission : 'none';
   const rows = [
