@@ -1,5 +1,5 @@
 // Bump VERSION whenever any file changes so installed phones pick up the update.
-const VERSION = 'stance-v2';
+const VERSION = 'stance-v4';
 const STATE = 'stance-state'; // nudge settings written by the page
 const FILES = [
   './', 'index.html', 'css/app.css', 'js/app.js', 'js/data.js', 'js/guide.js', 'js/clips.js',

@@ -1,6 +1,6 @@
 import {
   MOVES, SHOTS, COMBOS, LEVELS, PACES, ZONES, makeCaller, gapFor, maxHr, pctOfMax,
-  pctOfReserve, zoneFor, targetBpm, weightLoss, fmtTime, NUDGES, slug, allLines,
+  pctOfReserve, zoneFor, targetBpm, weightLoss, fmtTime, NUDGE_TEXT, slug, allLines,
 } from './data.js';
 import { GUIDE } from './guide.js';
 import { CLIPS } from './clips.js';
@@ -28,6 +28,8 @@ const save = () => store.set('settings', S);
 const LIMITS = { work: [10, 300], rest: [5, 300], rounds: [1, 60] };
 
 function renderTrain() {
+  document.documentElement.dataset.level = S.level; // tints the whole app
+  $('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
   $('#levels').innerHTML = Object.entries(LEVELS).map(([n, lv]) =>
     `<button type="button" role="radio" aria-checked="${S.level == n}" data-level="${n}"><span>Level</span><b>${n}</b></button>`).join('');
 
@@ -57,10 +59,7 @@ function renderTrain() {
   $('#opt-voice').checked = S.voice;
   $('#opt-coach').checked = S.coach && coachReady;
   $('#opt-coach').disabled = !coachReady;
-  if (!coachReady) {
-    const have = LINES.filter((l) => CLIPS.includes(slug(l))).length;
-    $('#coach-note').textContent = `${have} of ${LINES.length} lines recorded so far. The phone's voice is used until the set is complete.`;
-  }
+  if (!coachReady) $('#coach-note').textContent = 'Not recorded yet. The phone\'s voice is used for now.';
   $('#opt-beeps').checked = S.beeps;
 
   $('#cut-box').hidden = S.pace !== 'hard';
@@ -128,9 +127,10 @@ function audioInit() {
 }
 
 // Recorded coach lines, one mp3 per phrase. Anything without a clip falls back to the phone's voice.
-// The coach only takes over once every line is recorded, so the voice never switches mid-session.
+// The coach only takes over when every line has a recording, so the voice never switches mid-session.
 const LINES = allLines();
-const coachReady = LINES.every((l) => CLIPS.includes(slug(l)));
+const hasClip = (text) => CLIPS.includes(slug(text));
+const coachReady = LINES.every(hasClip);
 const clips = new Map();
 let clipSrc = null, clipsLoading = false;
 async function loadClips() {
@@ -454,7 +454,7 @@ function renderLog() {
       const r = weightLoss(e.wIn, e.wOut);
       nums.push(`${e.wIn} → ${e.wOut} ${e.unit} (${r.pct.toFixed(1)}%)`);
     }
-    return `<div class="entry" style="--c: var(--${e.pace})"><div class="when">${when}</div>
+    return `<div class="entry"><div class="when">${when}</div>
       <div class="what">Level ${e.level} · ${p.name}${e.completed ? '' : ' (stopped early)'}</div>
       <div class="nums">${nums.join(' · ')}</div></div>`;
   }).join('');
@@ -585,7 +585,7 @@ async function syncNudgeState() {
   store.set('nudge', N);
   if (!('caches' in window)) return;
   try {
-    const state = { on: N.on, bg: N.bg, from: N.from, to: N.to, every: N.every, last: N.last, lastSession: log[0]?.ts ?? 0, lines: NUDGES };
+    const state = { on: N.on, bg: N.bg, from: N.from, to: N.to, every: N.every, last: N.last, lastSession: log[0]?.ts ?? 0, lines: [NUDGE_TEXT] };
     const cache = await caches.open('stance-state');
     await cache.put('state', new Response(JSON.stringify(state), { headers: { 'content-type': 'application/json' } }));
   } catch { /* storage blocked */ }
@@ -601,13 +601,12 @@ async function notify(body) {
 }
 
 function fireNudge(test) {
-  const line = NUDGES[Math.floor(Math.random() * NUDGES.length)];
+  const line = NUDGE_TEXT;
   if (!test) { N.last = Date.now(); syncNudgeState(); }
   if (document.visibilityState === 'visible') {
     $('#nudge-text').textContent = line;
     $('#nudge').hidden = false;
     navigator.vibrate?.([200, 100, 200]);
-    audioInit(); say(line); // silent until the first tap on some phones
     if (test) notify(line);
   } else notify(line);
 }
@@ -701,6 +700,8 @@ for (const [id, key] of [['n-from', 'from'], ['n-to', 'to'], ['n-every', 'every'
 $('#n-test').addEventListener('click', () => fireNudge(true));
 
 renderTrain(); renderHr(); renderLog();
+// Decode the coach clips up front so the first line of a session is already the coach.
+try { actx = new (window.AudioContext || window.webkitAudioContext)(); loadClips(); } catch { actx = null; }
 
 if (hasSW) navigator.serviceWorker.register('sw.js').catch(() => {});
 syncNudgeState(); renderNudge();

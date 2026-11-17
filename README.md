@@ -10,7 +10,7 @@ A wrestling stance and motion caller. Pick a level and a pace, prop your phone u
 | --- | --- |
 | 1 | shot, sprawl, down block, shot re-shot |
 | 2 | Level 1 plus fake-club-shot, club shot, circle hard left, circle hard right |
-| 3 | Level 2 plus named shots (double, single, high crotch, sweep single, low single) and 22 combos |
+| 3 | Level 2 plus named shots (double, single, high crotch, sweep single, low single) and 15 combos |
 
 **Three paces**
 
@@ -49,11 +49,15 @@ After the first visit it works with no connection.
 
 ## Updating
 
-Change the files, then bump `VERSION` at the top of `sw.js` (for example `stance-v3`) so installed phones pick up the new version.
+Change the files, then bump `VERSION` at the top of `sw.js` (for example `stance-v5`) so installed phones pick up the new version.
 
 ## Coach voice
 
-The app can play recorded coach lines (made with ElevenLabs, voice "Dave - Coach") instead of the phone's built-in voice. Each line is one file in `audio/`, named after the spoken text in lowercase with dashes (`Shot, re-shot` → `audio/shot-re-shot.mp3`), and listed in `js/clips.js`. There are 47 lines in total (`allLines()` in `js/data.js`). The coach voice turns on by itself once all 47 are present; until then the phone's voice is used so the voice never changes mid-session.
+Recorded coach lines replace the phone's built-in voice. Each of the 34 lines the app can say is one file in `audio/`, named after the spoken text in lowercase with dashes (`Shot, re-shot` → `audio/shot-re-shot.mp3`), and listed in `js/clips.js`. To add a new call, add the move in `js/data.js`, upload its mp3, add the name to `js/clips.js`, and bump `VERSION` in `sw.js`. If any line has no recording the app falls back to the phone's voice.
+
+## Look
+
+The interface is plain grey. Picking a level tints the whole app slightly: blue for Level 1, green for Level 2, red for Level 3.
 
 ## What nudges cannot do
 

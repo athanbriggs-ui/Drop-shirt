@@ -33,12 +33,6 @@ export const COMBOS = [
   combo('Fake, fake, shot', 2.8),
   combo('Sprawl, circle left', 3.6),
   combo('Sprawl, circle right', 3.6),
-  combo('Circle left, shot', 3.6),
-  combo('Circle right, shot', 3.6),
-  combo('Club, circle left, shot', 4.2),
-  combo('Club, circle right, shot', 4.2),
-  combo('Down block, circle left, shot', 4.4),
-  combo('Down block, circle right, shot', 4.4),
   combo('Double leg, sprawl', 3.4),
   combo('Single leg, re-shot double', 3.6),
   combo('High crotch, sprawl, re-shot', 5.0),
@@ -46,24 +40,16 @@ export const COMBOS = [
   combo('Fake, club, shot, re-shot', 4.4),
   combo('Shot, re-shot, sprawl', 4.6),
   combo('Sprawl, sprawl, shot', 4.6),
-  combo('Circle left, circle right, shot', 5.6),
   combo('Down block, club, shot', 3.6),
 ];
 
 export const SYSTEM_LINES = ['Get in your stance', 'Go', 'Last round', 'Last round. Go', 'Rest', 'Time. Good work.'];
 
-export const NUDGES = [
-  "Get off your phone. Six minutes of stance and motion. Let's go.",
-  "You've been sitting too long. Get up and get in your stance.",
-  'Somebody in your bracket is drilling right now. What are you doing?',
-  'No session today. Fix that. Hit start.',
-  'Put the phone down and move your feet.',
-  'Stop scrolling. Start wrestling.',
-];
+export const NUDGE_TEXT = 'You have not trained today.';
 
 // File name for a spoken line: audio/<slug>.mp3
 export const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-export const allLines = () => [...Object.values(MOVES), ...SHOTS, ...COMBOS].map((m) => m.say).concat(SYSTEM_LINES, NUDGES);
+export const allLines = () => [...Object.values(MOVES), ...SHOTS, ...COMBOS].map((m) => m.say).concat(SYSTEM_LINES);
 
 const L1 = ['shot', 'sprawl', 'downblock', 'reshot'];
 const L2 = [...L1, 'fakeClubShot', 'clubShot', 'circleLeft', 'circleRight'];
@@ -98,10 +84,11 @@ export const PACES = {
 };
 
 // Returns a function that hands back the next call for a level.
-// Never repeats the call it just made.
-export function makeCaller(level, rng = Math.random) {
+// Never repeats the call it just made. `allowed` can leave out moves (used to skip ones with no recording).
+export function makeCaller(level, rng = Math.random, allowed = () => true) {
   const lv = LEVELS[level];
   const base = lv.base.map((k) => MOVES[k]);
+  const shots = SHOTS.filter(allowed), combos = COMBOS.filter(allowed);
   let last = null;
   const pick = (list) => list[Math.floor(rng() * list.length)];
   return function next(maxT = Infinity) {
@@ -109,7 +96,8 @@ export function makeCaller(level, rng = Math.random) {
       let pool = base;
       if (lv.extras) {
         const r = rng();
-        pool = r < 0.4 ? base : r < 0.6 ? SHOTS : COMBOS;
+        pool = r < 0.4 ? base : r < 0.6 ? shots : combos;
+        if (!pool.length) pool = base;
       }
       const m = pick(pool);
       if (m !== last && m.t <= maxT) { last = m; return m; }
